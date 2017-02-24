@@ -103,5 +103,5 @@ class MNN:
         else:
             raise Exception(" [!] Trest mode but no checkpoint found")
 
-    def close():
+    def close(self):
         self.sess.close()

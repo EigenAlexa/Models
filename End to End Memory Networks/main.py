@@ -2,9 +2,9 @@ from model import MNN
 from data import Data
 
 def main():
-    data = Data("/home/ubuntu/gutenberg_test")
-    data_dir, data_name = "/home/ubuntu/converted_test_data", "gutenberg"
-    data.convert(data_dir, data_name)
+    data = Data("10.0.1.185")
+    data_dir, data_name = "test_wiki", "wiki"
+    data.convert((data_dir, data_name), collections = {"corpora": ["wiki"]})
 
     mnn = MNN({"nhop": 1, "nepoch": 1})
     mnn.train(data_dir, data_name)
