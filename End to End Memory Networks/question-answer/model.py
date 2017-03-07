@@ -29,14 +29,14 @@ class MNN:
         self.vocab_size = vocab_size
         self.max_sent_size = max_sent_size
         self.batch_size = batch_size
-        self.mem_size = init_lr 
-        self.emb_dim = max_grad_norm 
+        self.mem_size = mem_size
+        self.emb_dim = emb_dim
         self.nhops = nhops
         self.nepochs = nepochs
-        self.max_grad_norm = emb_dim 
-        self.init_lr = mem_size 
-        self.init_hid = init_std 
-        self.init_std = init_hid 
+        self.max_grad_norm = max_grad_norm
+        self.init_lr = init_lr 
+        self.init_hid = init_hid
+        self.init_std = init_std
         self.sess = tf.Session()
 
         with self.sess.as_default():
@@ -46,12 +46,12 @@ class MNN:
                                   memory_size = self.mem_size,
                                   embedding_size = self.emb_dim,
                                   hops = self.nhops,
-                                  init_lr = self.init_lr
+                                  init_lr = self.init_lr,
                                   max_grad_norm = self.max_grad_norm,
                                   nonlin = None,
                                   initializer = tf.random_normal_initializer(stddev = self.init_std),
                                   session = self.sess)
-        
+
     def train(self, train_data, valid_data, verbose = True):
         """ Trains the model, using data that was initialized in the constructor based on the given data directory.
         """
@@ -59,8 +59,7 @@ class MNN:
             self.mem_net.train(train_data, valid_data, self.nepochs, verbose)
 
     def test(self, test_data):
-        """ Tests the model on the test data specified during training, returning the loss and accuracy on the
-        dataset.
+        """ Tests the model on the test data specified during training, returning the loss and accuracy on the dataset.
         """
         with self.sess.as_default():
             loss = self.mem_net.test(test_data)
@@ -69,8 +68,7 @@ class MNN:
         return (loss, acc) 
 
     def feed(self, sentence_context, query):
-        """ Feeds the given data, expected to be a set of MEM_SIZE words, and outputs the models' prediction
-        for the next word.
+        """ Feeds the given data, expected to be a set of MEM_SIZE words, and outputs the models' prediction for the next word.
 
         @param data: (list(int)) List of the last MEM_SIZE words, represented as their one-hot indices.
         

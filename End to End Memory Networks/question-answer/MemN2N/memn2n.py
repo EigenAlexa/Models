@@ -9,7 +9,7 @@ import tensorflow as tf
 import numpy as np
 from six.moves import range
 from sklearn import metrics
-import random
+import random, math
 
 def position_encoding(sentence_size, embedding_size):
     """
@@ -99,7 +99,6 @@ class MemN2N(object):
 
             name: Name of the End-To-End Memory Network. Defaults to `MemN2N`.
         """
-
         self._batch_size = batch_size
         self._vocab_size = vocab_size
         self._sentence_size = sentence_size
@@ -125,7 +124,7 @@ class MemN2N(object):
         loss_op = cross_entropy_sum
 
         # Gradient pipeline
-        self._opt = tf.train.GradientDescentOptimizer(learning_rate = self.init_lr)
+        self._opt = tf.train.GradientDescentOptimizer(learning_rate = self._init_lr)
         grads_and_vars = self._opt.compute_gradients(loss_op)
         grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g,v in grads_and_vars]
         grads_and_vars = [(add_gradient_noise(g), v) for g,v in grads_and_vars]
@@ -233,9 +232,12 @@ class MemN2N(object):
         """ Trains the model on the given training and validation data.
         
         CURRENT:
-        @param train_data: (list(tuple(list(list(int)), list(int), int))) List of tuples, each containing a story (list of sentences), query (sentence), 
-            and answer (word), where a sentence is a list of words, and a word is represented with its one-hot index.
-        @param valid_data: (list(tuple(list(list(int)), list(int), int))) Same as training data, but used for validation.
+        @param train_data: (list(tuple(np.ndarray, np.ndarray, np.ndarray))) where the three numpy arrays represent a story, query, and 
+            answer. Each story has shape (memory_size, max_sentence_length) and is a list of sentences, each query has shape (max_sentence_length,),
+            and each answer has shape (vocab_size,). Each sentence is an array of words, where each word is represented by its one-hot index. The
+            answer is also a word, but is expanded to its full one-hot vector form rather than just the index.
+        @param valid_data: (list(tuple(np.ndarray, np.ndarray, np.ndarray))) Same as training data, but used
+            for validation.
         @param nepochs: (int) How many epochs to train for.
 
         NEW:
@@ -245,73 +247,62 @@ class MemN2N(object):
         
         @return (tuple(float, float)) Training and validation loss at the end of training.
         """
-        learning_rate = self._init_lr
+        anneal_stop_epoch, anneal_rate = nepochs, 25
         old_valid_loss = float("inf")
 
         for i in range(nepochs):
+            # Learning rate annealing
+            if i <= anneal_stop_epoch:
+                anneal = 2**(i // anneal_rate)
+            else:
+                anneal = 2**(anneal_stop_epoch // anneal_rate)
+
+            learning_rate = self._init_lr / anneal
+
+            # if valid_loss > old_valid_loss * 0.9999:
+                # learning_rate *= 2 / 3
+
+            # if learning_rate < 0.000001:
+                # break
+
             train_loss = self._train_batches_SGD(train_data, self._batch_size, learning_rate)
             valid_loss = self.test(valid_data)
 
-            if verbose:
-                print("Training loss: %s, Validation loss: %s" % (str(train_loss), str(valid_loss)))
-
-            if valid_loss > old_valid_loss * 0.9999:
-                learning_rate *= 2 / 3
-
-            if learning_rate < 0.000001:
-                break
+            if verbose and i % 10 == 0:
+                valid_acc = self.accuracy(valid_data)
+                print("Epoch %i" % i)
+                print("\tTraining loss: %s" % str(train_loss))
+                print("\tValidation loss: %s" % str(valid_loss))
+                print("\tValidation accuracy: %s" % str(valid_acc))
+                print()
 
             old_valid_loss = valid_loss
 
         if verbose:
-            train_acc = self.accuracy(train_data)
             valid_acc = self.accuracy(valid_data)
 
-            print("Final training accuracy: %s" % str(train_acc))
             print("Final validation accuracy: %s" % str(valid_acc))
-
-    def test(self, data):
-        """ Runs the model on the data and returns the loss, without training the model.
-        """
-        sentence_context, queries, answers = (np.ndarray(arr) for arr in tuple(zip(*data)))
-        feed = {self._sentence_context: sentence_context, self._queries: queries, self._answers: answers}
-        loss = self._sess.run(self.loss_op, feed_dict = feed)
-        return loss / len(data)
-    
-    def accuracy(self, data):
-        sentence_context, queries, answers = (np.ndarray(arr) for arr in tuple(zip(*data)))
-        predictions = self.predict(sentence_context, queries)
-        acc = metrics.accuracy_score(predictions, answers)
-
-        return acc
-
-    def predict(self, sentence_context, queries):
-        """Predicts answers as one-hot encoding.
-
-        Args:
-            sentence_context: Tensor (None, memory_size, sentence_size)
-            queries: Tensor (None, sentence_size)
-
-        Returns:
-            answers: Tensor (None, vocab_size)
-        """
-        feed_dict = {self._sentence_context: sentence_context, self._queries: queries}
-        return self._sess.run(self.predict_op, feed_dict = feed_dict)
 
     def _train_batches_SGD(self, data, batch_size, learning_rate):
         """ Trains the model on the given data.
         """
         num_batches = int(math.ceil(len(data) / batch_size))
+        batch_indices = list(range(0, len(data) - batch_size, batch_size))
+        random.shuffle(batch_indices)
+
         loss = 0
-        for _ in range(num_batches):
-            # Stochastically build batch
-            batch_start = random.randrange(batch_size, len(data))
-            batch = data[batch_start : batch_start + batch_size]
-            sentence_context, queries, answers = (np.ndarray(arr) for arr in tuple(zip(*batch)))
+        for batch_index in batch_indices:
+        # for _ in range(num_batches):
+            # # Stochastically build batch
+            # batch_index = random.randrange(batch_size, len(data))
+            batch = data[batch_index : batch_index + batch_size]
+
+            sentence_context, queries, answers = zip(*batch)
+            sentence_context, queries, answers = np.array(sentence_context), np.array(queries), np.array(answers)
             
             loss += self._train_batch(sentence_context, queries, answers, learning_rate)
 
-        return loss / len(data)
+        return loss / (num_batches * batch_size) # Return average loss
 
 
     def _train_batch(self, sentence_context, queries, answers, learning_rate):
@@ -329,3 +320,36 @@ class MemN2N(object):
         feed_dict = {self._sentence_context: sentence_context, self._queries: queries, self._answers: answers}
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict = feed_dict)
         return loss 
+
+    def test(self, data):
+        """ Runs the model on the data and returns the loss, without training the model.
+        """
+        sentence_context, queries, answers = zip(*data)
+        sentence_context, queries, answers = np.array(sentence_context), np.array(queries), np.array(answers)
+
+        feed = {self._sentence_context: sentence_context, self._queries: queries, self._answers: answers}
+        loss = self._sess.run(self.loss_op, feed_dict = feed)
+        return loss / len(data)
+    
+    def accuracy(self, data):
+        sentence_context, queries, answers = zip(*data)
+        sentence_context, queries, answers = np.array(sentence_context), np.array(queries), np.array(answers)
+        labels = np.argmax(answers, axis = 1)
+
+        predictions = self.predict(sentence_context, queries)
+        acc = metrics.accuracy_score(predictions, labels)
+
+        return acc
+
+    def predict(self, sentence_context, queries):
+        """Predicts answers as one-hot encoding.
+
+        Args:
+            sentence_context: Tensor (None, memory_size, sentence_size)
+            queries: Tensor (None, sentence_size)
+
+        Returns:
+            answers: Tensor (None, vocab_size)
+        """
+        feed_dict = {self._sentence_context: sentence_context, self._queries: queries}
+        return self._sess.run(self.predict_op, feed_dict = feed_dict)
