@@ -127,14 +127,14 @@ class MemN2N(object):
         self._opt = tf.train.GradientDescentOptimizer(learning_rate = self._init_lr)
         grads_and_vars = self._opt.compute_gradients(loss_op)
         grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g,v in grads_and_vars]
-        grads_and_vars = [(add_gradient_noise(g), v) for g,v in grads_and_vars]
+        grads_and_vars = [(add_gradient_noise(g), v) for g, v in grads_and_vars]
         nil_grads_and_vars = []
         for g, v in grads_and_vars:
             if v.name in self._nil_vars:
                 nil_grads_and_vars.append((zero_nil_slot(g), v))
             else:
                 nil_grads_and_vars.append((g, v))
-        train_op = self._opt.apply_gradients(nil_grads_and_vars, name="train_op")
+        train_op = self._opt.apply_gradients(nil_grads_and_vars, name = "train_op")
 
         # Predict ops
         predict_op = tf.argmax(logits, 1, name = "predict_op") # Model answer is one-hot vector
@@ -247,26 +247,27 @@ class MemN2N(object):
         
         @return (tuple(float, float)) Training and validation loss at the end of training.
         """
-        anneal_stop_epoch, anneal_rate = nepochs, 25
+        # anneal_stop_epoch, anneal_rate = nepochs, 25
+        learning_rate = self._init_lr
         old_valid_loss = float("inf")
 
         for i in range(nepochs):
-            # Learning rate annealing
-            if i <= anneal_stop_epoch:
-                anneal = 2**(i // anneal_rate)
-            else:
-                anneal = 2**(anneal_stop_epoch // anneal_rate)
+            # if i <= anneal_stop_epoch:
+                # anneal = 2**(i // anneal_rate)
+            # else:
+                # anneal = 2**(anneal_stop_epoch // anneal_rate)
 
-            learning_rate = self._init_lr / anneal
-
-            # if valid_loss > old_valid_loss * 0.9999:
-                # learning_rate *= 2 / 3
-
-            # if learning_rate < 0.000001:
-                # break
+            # learning_rate = self._init_lr / anneal
 
             train_loss = self._train_batches_SGD(train_data, self._batch_size, learning_rate)
             valid_loss = self.test(valid_data)
+
+            # Learning rate annealing
+            if valid_loss > old_valid_loss * 0.9999:
+                learning_rate *= 2 / 3
+
+            if learning_rate < 0.000001:
+                break
 
             if verbose and i % 10 == 0:
                 valid_acc = self.accuracy(valid_data)

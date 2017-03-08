@@ -25,8 +25,6 @@ def main():
               init_std = 0.1)
     mnn.train(training, validation, verbose = True)
 
-    # print(mnn.test())
-
     # mnn.save()
     # mnn.close()
 
