@@ -14,7 +14,7 @@ MongoConn	new_data.py	/^class MongoConn(Data):$/;"	c
 ProcessedData	new_data.py	/^class ProcessedData:$/;"	c
 __init__	MemN2N/memn2n.py	/^    def __init__(self, batch_size, vocab_size, sentence_size, memory_size, embedding_size,$/;"	m	class:MemN2N
 __init__	data.py	/^    def __init__(self, data_dir, memory_size = 50, num_tasks = 20):$/;"	m	class:Data
-__init__	model.py	/^    def __init__(self, vocab_size, max_sent_size, batch_size,$/;"	m	class:MNN
+__init__	model.py	/^    def __init__(self, data, batch_size,$/;"	m	class:MNN
 __init__	new_data.py	/^    def __init__(self, ip_addr, port = 27017):$/;"	m	class:MongoConn
 __init__	new_data.py	/^    def __init__(self, path):$/;"	m	class:DataDir
 __init__	new_data.py	/^    def __init__(self, source):$/;"	m	class:ProcessedData
@@ -48,6 +48,7 @@ main	main.py	/^def main():$/;"	f
 max_sent_size	data.py	/^    def max_sent_size(self):$/;"	m	class:Data
 position_encoding	MemN2N/memn2n.py	/^def position_encoding(sentence_size, embedding_size):$/;"	f
 predict	MemN2N/memn2n.py	/^    def predict(self, sentence_context, queries):$/;"	m	class:MemN2N
+predict	model.py	/^    def predict(self, sentences, query):$/;"	m	class:MNN
 read_data	data.py	/^    def read_data(self):$/;"	m	class:Data
 read_data	new_data.py	/^    def read_data(self):$/;"	m	class:ProcessedData
 save	model.py	/^    def save(self, path = ".\/MemN2N.model"):$/;"	m	class:MNN
@@ -57,4 +58,5 @@ train	MemN2N/memn2n.py	/^    def train(self, train_data, valid_data, nepochs, ve
 train	model.py	/^    def train(self, train_data, valid_data, verbose = True):$/;"	m	class:MNN
 vectorize_data	data.py	/^    def vectorize_data(data, word_idx, sentence_size, memory_size):$/;"	m	class:BabiUtils
 vocab_size	data.py	/^    def vocab_size(self):$/;"	m	class:Data
+word2index	data.py	/^    def word2index(self):$/;"	m	class:Data
 zero_nil_slot	MemN2N/memn2n.py	/^def zero_nil_slot(t, name = None):$/;"	f

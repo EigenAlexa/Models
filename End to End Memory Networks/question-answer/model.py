@@ -1,9 +1,10 @@
 import os
 import tensorflow as tf
 from MemN2N.memn2n import MemN2N
+from data import BabiUtils
 
 class MNN:
-    def __init__(self, vocab_size, max_sent_size, batch_size,
+    def __init__(self, data, batch_size,
                  mem_size = 20,
                  emb_dim = 150,
                  nhops = 3,
@@ -14,8 +15,7 @@ class MNN:
                  init_std = 0.1):
         """ Initializes an end-to-end memory network with the architecture and specified hyperparameters.
             
-            @param vocab_size: (int) Size of the dictionary from which the words are drawn.
-            @param max_sent_size: (int) Maximum length (in number of words) a sentence can have.
+            @param data: (data.Data) Data object pointing to the training, validation, and testing data
             @param batch_size: (int) Batch size.
             @param mem_size: (int) Size of internal memory, representing how many context sentences are used.
             @param emb_dim: (int) Dimension of the sentence embedding.
@@ -26,8 +26,10 @@ class MNN:
             @param init_hid: (float) Value that the dummy query sentence vector is filled with.
             @param init_std: (float) Standard deviation of the Gaussian distribution used to initialize weights.
         """
-        self.vocab_size = vocab_size
-        self.max_sent_size = max_sent_size
+        self.vocab_size = data.vocab_size()
+        self.max_sent_size = data.max_sent_size()
+        self.word_to_index = data.word2index()
+
         self.batch_size = batch_size
         self.mem_size = mem_size
         self.emb_dim = emb_dim
@@ -66,6 +68,17 @@ class MNN:
             acc = self.mem_net.accuracy(test_data)
 
         return (loss, acc) 
+    
+    def predict(self, sentences, query):
+        """ Feeds raw text data through the model, returning the answer as a word.
+        
+        @param sentences: (list(str)) Sentence context
+        @param query: (str) Query
+
+        @return (str) Answer
+        """
+        sentences = [BabiUtils._tokenize(sentence) for sentence in sentences]
+        # TODO
 
     def feed(self, sentence_context, query):
         """ Feeds the given data, expected to be a set of MEM_SIZE words, and outputs the models' prediction for the next word.
@@ -74,8 +87,8 @@ class MNN:
         
         @return (int) The one-hot index of the predicted word.
         """
-        sentence_context.reshape([1, self.mem_size, self.max_sent_size])
-        query.reshape([1, max_sent_size])
+        sentence_context = sentence_context.reshape([1, self.mem_size, self.max_sent_size])
+        query = query.reshape([1, self.max_sent_size])
         answer = self.mem_net.predict(sentence_context, query)
 
         return answer
@@ -85,7 +98,7 @@ class MNN:
             raise Exception("Model hasn't been trained yet")
 
         with self.sess.as_default():
-            self.mem_net.saver.save(self.mem_net.sess, path, global_step = self.mem_net.step.astype(int))
+            self.mem_net.save()
 
     def load(self, directory = "./"):
         ckpt = tf.train.get_checkpoint_state(directory)

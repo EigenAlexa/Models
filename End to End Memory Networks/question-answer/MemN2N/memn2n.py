@@ -152,7 +152,6 @@ class MemN2N(object):
         self._sess = session
         self._sess.run(init_op)
 
-
     def _build_inputs(self):
         # Create nodes for expected inputs
         self._sentence_context = tf.placeholder(tf.int32, [None, self._memory_size, self._sentence_size], name = "sentence_context") # Memory matrix
@@ -230,8 +229,7 @@ class MemN2N(object):
 
     def train(self, train_data, valid_data, nepochs, verbose = True):
         """ Trains the model on the given training and validation data.
-        
-        CURRENT:
+
         @param train_data: (list(tuple(np.ndarray, np.ndarray, np.ndarray))) where the three numpy arrays represent a story, query, and 
             answer. Each story has shape (memory_size, max_sentence_length) and is a list of sentences, each query has shape (max_sentence_length,),
             and each answer has shape (vocab_size,). Each sentence is an array of words, where each word is represented by its one-hot index. The
@@ -239,13 +237,6 @@ class MemN2N(object):
         @param valid_data: (list(tuple(np.ndarray, np.ndarray, np.ndarray))) Same as training data, but used
             for validation.
         @param nepochs: (int) How many epochs to train for.
-
-        NEW:
-        @param train_data: (list(list(int))) List of sentences, each of which is a list of words, represented with their one-hot indices.
-        @param valid_data: (list(list(int))) Same as training data, but used for validation.
-        @param nepochs: (int) How many epochs to train for.
-        
-        @return (tuple(float, float)) Training and validation loss at the end of training.
         """
         # anneal_stop_epoch, anneal_rate = nepochs, 25
         learning_rate = self._init_lr
@@ -354,3 +345,17 @@ class MemN2N(object):
         """
         feed_dict = {self._sentence_context: sentence_context, self._queries: queries}
         return self._sess.run(self.predict_op, feed_dict = feed_dict)
+    
+    def save(self, name = None):
+        if name is None:
+            name = self._name
+
+        saver = tf.train.Saver()
+        saver.save(self._sess, name)
+
+    def load(self, model_file = None):
+        if model_file is None:
+            model_file = self._name
+
+        saver = tf.train.import_meta_graph(model_file)
+        saver.restore(self._sess, tf.train.latest_checkpoint("./"))

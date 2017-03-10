@@ -17,7 +17,8 @@ class Data:
         # If given memory size is too large, reset it as necessary
         max_story_size = max([len(story) for story, _, _ in self.data])
         self.memory_size = min(memory_size, max_story_size)
-        self.word_to_index = None
+        self.word_to_index = {}
+        self.max_sentence_size = -1
 
     def read_data(self):
         # Build dictionary of words
@@ -55,18 +56,18 @@ class Data:
 
         training, validation = [], []
         for i in range(len(datasets[0])):
-            data_point = tuple((np.array(datasets[j][i]) for j in range(3)))
+            data_point = tuple(np.array(datasets[j][i]) for j in range(3))
             training.append(data_point)
 
         for i in range(len(datasets[3])):
-            data_point = tuple((np.array(datasets[j][i]) for j in range(3, 6)))
+            data_point = tuple(np.array(datasets[j][i]) for j in range(3, 6))
             validation.append(data_point)
 
         # Test data
         testing = []
         S, Q, A = BabiUtils.vectorize_data(flatten_sublists(self.test_set), self.word_to_index, self.max_sentence_size, self.memory_size)
         for i in range(len(S)):
-            data_point = (np.array(l[i]) for l in (S, Q, A))
+            data_point = tuple(np.array(l[i]) for l in (S, Q, A))
             testing.append(data_point)
 
         return (training, validation, testing)
@@ -82,6 +83,12 @@ class Data:
             raise Exception("Data hasn't been read yet")
 
         return self.max_sentence_size
+
+    def word2index(self):
+        if self.word_to_index is None:
+            raise Exception("Data hasn't been read yet")
+
+        return self.word_to_index
 
 flatten_sublists = lambda l: list(chain.from_iterable(l)) # Flattens list of lists by one level
 

@@ -13,8 +13,10 @@ _train_batch	memn2n.py	/^    def _train_batch(self, sentence_context, queries, a
 _train_batches_SGD	memn2n.py	/^    def _train_batches_SGD(self, data, batch_size, learning_rate):$/;"	m	class:MemN2N
 accuracy	memn2n.py	/^    def accuracy(self, data):$/;"	m	class:MemN2N
 add_gradient_noise	memn2n.py	/^def add_gradient_noise(t, stddev = 1e-3, name = None):$/;"	f
+load	memn2n.py	/^    def load(self, model_file = None):$/;"	m	class:MemN2N
 position_encoding	memn2n.py	/^def position_encoding(sentence_size, embedding_size):$/;"	f
 predict	memn2n.py	/^    def predict(self, sentence_context, queries):$/;"	m	class:MemN2N
+save	memn2n.py	/^    def save(self, name = None):$/;"	m	class:MemN2N
 test	memn2n.py	/^    def test(self, data):$/;"	m	class:MemN2N
 train	memn2n.py	/^    def train(self, train_data, valid_data, nepochs, verbose = True):$/;"	m	class:MemN2N
 zero_nil_slot	memn2n.py	/^def zero_nil_slot(t, name = None):$/;"	f
