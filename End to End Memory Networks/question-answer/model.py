@@ -81,12 +81,6 @@ class MNN:
         # TODO
 
     def feed(self, sentence_context, query):
-        """ Feeds the given data, expected to be a set of MEM_SIZE words, and outputs the models' prediction for the next word.
-
-        @param data: (list(int)) List of the last MEM_SIZE words, represented as their one-hot indices.
-        
-        @return (int) The one-hot index of the predicted word.
-        """
         sentence_context = sentence_context.reshape([1, self.mem_size, self.max_sent_size])
         query = query.reshape([1, self.max_sent_size])
         answer = self.mem_net.predict(sentence_context, query)
@@ -101,11 +95,8 @@ class MNN:
             self.mem_net.save()
 
     def load(self, directory = "./"):
-        ckpt = tf.train.get_checkpoint_state(directory)
-        if ckpt and ckpt.model_checkpoint_path:
-            tf.train().Saver().restore(self.mem_net.sess, ckpt.model_checkpoint_path)
-        else:
-            raise Exception(" [!] Trest mode but no checkpoint found")
+        with self.sess.as_default():
+            self.mem_net.load()
 
     def close(self):
         self.sess.close()

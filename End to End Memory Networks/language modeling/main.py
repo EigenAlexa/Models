@@ -8,7 +8,7 @@ def main():
     # data = Data(source = (data_dir, data_name))
     # train_data, valid_data, test_data, word2idx = data.read_data()
 
-    data = Data(source = ("/home/ubuntu/ptb_data","ptb"), raw = False)
+    data = Data(source = ("/home/ubuntu/data/ptb_data","ptb"), raw = False)
     (train_data, valid_data, test_data), word2idx = data.read_data()
     idx2word = dict(zip(word2idx.values(), word2idx.keys()))
 

@@ -9,7 +9,7 @@ import tensorflow as tf
 import numpy as np
 from six.moves import range
 from sklearn import metrics
-import random, math
+import random, math, os
 
 def position_encoding(sentence_size, embedding_size):
     """
@@ -110,6 +110,7 @@ class MemN2N(object):
         self._nonlin = nonlin
         self._init = initializer
         self._name = name
+        self._checkpoint_dir = "./checkpoints"
 
         self._encoding = tf.constant(encoding(self._sentence_size, self._embedding_size), name = "encoding") # Encoding vector
 
@@ -124,7 +125,8 @@ class MemN2N(object):
         loss_op = cross_entropy_sum
 
         # Gradient pipeline
-        self._opt = tf.train.GradientDescentOptimizer(learning_rate = self._init_lr)
+        # self._opt = tf.train.AdamOptimizer(learning_rate = self._learning_rate)
+        self._opt = tf.train.GradientDescentOptimizer(learning_rate = self._learning_rate)
         grads_and_vars = self._opt.compute_gradients(loss_op)
         grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g,v in grads_and_vars]
         grads_and_vars = [(add_gradient_noise(g), v) for g, v in grads_and_vars]
@@ -157,6 +159,7 @@ class MemN2N(object):
         self._sentence_context = tf.placeholder(tf.int32, [None, self._memory_size, self._sentence_size], name = "sentence_context") # Memory matrix
         self._queries = tf.placeholder(tf.int32, [None, self._sentence_size], name = "queries") # Query sentence
         self._answers = tf.placeholder(tf.int32, [None, self._vocab_size], name = "answers") # Answer
+        self._learning_rate = tf.placeholder(tf.float32)
 
     def _build_params(self):
         # Create nodes for model parameters, which are the embedding matrices
@@ -243,6 +246,19 @@ class MemN2N(object):
         old_valid_loss = float("inf")
 
         for i in range(nepochs):
+            train_loss = self._train_batches_SGD(train_data, self._batch_size, learning_rate)
+            valid_loss = self.test(valid_data)
+
+            # Learning rate annealing
+
+            # Approach 1
+            if valid_loss > old_valid_loss * 0.9999:
+                learning_rate *= 2 / 3
+
+            # if learning_rate < 0.000001:
+                # break
+
+            # # Approach 2
             # if i <= anneal_stop_epoch:
                 # anneal = 2**(i // anneal_rate)
             # else:
@@ -250,15 +266,15 @@ class MemN2N(object):
 
             # learning_rate = self._init_lr / anneal
 
-            train_loss = self._train_batches_SGD(train_data, self._batch_size, learning_rate)
-            valid_loss = self.test(valid_data)
+            # Approach 3
+            # if valid_loss < old_valid_loss * 0.9999:
+                # learning_rate *= 1.01
+            # elif i % 7 == 0:
+                # print("Loss increased on epoch %i" % i)
+                # learning_rate *= 0.5
+                # self.load()
 
-            # Learning rate annealing
-            if valid_loss > old_valid_loss * 0.9999:
-                learning_rate *= 2 / 3
-
-            if learning_rate < 0.000001:
-                break
+            # self.save()
 
             if verbose and i % 10 == 0:
                 valid_acc = self.accuracy(valid_data)
@@ -266,6 +282,7 @@ class MemN2N(object):
                 print("\tTraining loss: %s" % str(train_loss))
                 print("\tValidation loss: %s" % str(valid_loss))
                 print("\tValidation accuracy: %s" % str(valid_acc))
+                print("\tLearning rate: %s" % str(learning_rate))
                 print()
 
             old_valid_loss = valid_loss
@@ -296,7 +313,6 @@ class MemN2N(object):
 
         return loss / (num_batches * batch_size) # Return average loss
 
-
     def _train_batch(self, sentence_context, queries, answers, learning_rate):
         """Runs the training algorithm over the passed batch (list of stories, where a story is a list
         of sentences, where a sentence is a list of words, where a word is encoded with its index).
@@ -309,7 +325,13 @@ class MemN2N(object):
         Returns:
             loss: floating-point number, the loss computed for the batch
         """
-        feed_dict = {self._sentence_context: sentence_context, self._queries: queries, self._answers: answers}
+        feed_dict = {
+            self._sentence_context: sentence_context,
+            self._queries: queries,
+            self._answers: answers,
+            self._learning_rate: learning_rate
+        }
+
         loss, _ = self._sess.run([self.loss_op, self.train_op], feed_dict = feed_dict)
         return loss 
 
@@ -346,16 +368,26 @@ class MemN2N(object):
         feed_dict = {self._sentence_context: sentence_context, self._queries: queries}
         return self._sess.run(self.predict_op, feed_dict = feed_dict)
     
-    def save(self, name = None):
-        if name is None:
-            name = self._name
+    def save(self, index = None):
+        if not os.path.exists(self._checkpoint_dir) or not os.path.isdir(self._checkpoint_dir):
+            os.makedirs(self._checkpoint_dir)
+
+        if index is None:
+            index = len(os.listdir(self._checkpoint_dir))
+
+        model_dir = "model_%i" % index
+        os.makedirs(os.path.join(self._checkpoint_dir, model_dir))
+        model_file = os.path.join(self._checkpoint_dir, model_dir, self._name)
 
         saver = tf.train.Saver()
-        saver.save(self._sess, name)
+        saver.save(self._sess, model_file)
 
-    def load(self, model_file = None):
-        if model_file is None:
-            model_file = self._name
+    def load(self, index = None):
+        if index is None:
+            index = len(os.listdir(self._checkpoint_dir)) - 1
 
-        saver = tf.train.import_meta_graph(model_file)
-        saver.restore(self._sess, tf.train.latest_checkpoint("./"))
+        model_dir = "model_%i" % index
+        model_file = os.path.join(self._checkpoint_dir, model_dir, self._name)
+
+        saver = tf.train.Saver()
+        saver.restore(self._sess, model_file)
