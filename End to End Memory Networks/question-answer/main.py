@@ -1,7 +1,7 @@
 from model import MNN
 from data import Data
-
 import tensorflow as tf
+import time
 
 def main():
     memory_size = 50
@@ -14,20 +14,23 @@ def main():
 
     mnn = MNN(data = data,
               batch_size = 32,
-              mem_size = memory_size,
-              emb_dim = 40,
+              memory_size = memory_size,
+              embedding_dim = 40,
               nhops = 3,
-              nepochs = 100,
-              max_grad_norm = 40,
+              num_rnn_layers = 2,
+              num_lstm_units = 200,
+              lstm_forget_bias = 0.0,
+              rnn_dropout_keep_prob = 0.5,
               init_lr = 0.01,
-              init_hid = 0.1,
-              init_std = 0.1)
+              max_grad_norm = 40)
 
+    print("Training...")
+    start = time.time()
     mnn.train(training, validation, verbose = True)
-    # prediction = mnn.feed(testing[0][0], testing[0][1])
-    # print(prediction)
+    end = time.time()
+    print("Training took %s seconds" % str(end - start))
 
-    # mnn.save()
+    mnn.save()
     mnn.close()
 
 if __name__ == "__main__":

@@ -1,12 +1,9 @@
-import warnings, os, re
+import os, re, warnings
 import numpy as np
 from itertools import chain
 from functools import reduce
 
-# Ignore warning that cross_validation is deprecated
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", category = DeprecationWarning)
-    from sklearn import cross_validation
+from sklearn.model_selection import train_test_split
 
 class Data:
     def __init__(self, data_dir, memory_size = 50, num_tasks = 20):
@@ -21,6 +18,8 @@ class Data:
         self.max_sentence_size = -1
 
     def read_data(self):
+        """ Reads Babi tasks from the given data directory into numpy arrays.
+        """
         # Build dictionary of words
         dictionary = set([])
         for story, query, answer in self.data:
@@ -48,7 +47,7 @@ class Data:
             S, Q, A = BabiUtils.vectorize_data(task, self.word_to_index, self.max_sent_size(), self.memory_size)
 
             # Split into train and validation
-            ts, vs, tq, vq, ta, va = cross_validation.train_test_split(S, Q, A, test_size = 0.1, random_state = None)
+            ts, vs, tq, vq, ta, va = train_test_split(S, Q, A, test_size = 0.1, random_state = None)
             for dataset, data in zip(datasets, (ts, tq, ta, vs, vq, va)):
                 dataset.append(data)
 
