@@ -1,2 +1,3 @@
 *.pyc
-tags
+**/tags
+**/__pycache__

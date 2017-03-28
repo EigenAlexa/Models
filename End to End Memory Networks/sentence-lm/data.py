@@ -1,8 +1,6 @@
 import os, random
 import numpy as np
 
-from sklearn.model_selection import train_test_split
-
 class Data:
     def __init__(self, data_path, metadata_path, memory_size = 50, batch_size = 128):
         """ Constructor.

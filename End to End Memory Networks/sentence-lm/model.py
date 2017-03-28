@@ -184,7 +184,7 @@ class MNN:
 
         # Pass RNN outputs through final linear transform into word manifold
         layer_outputs = tf.transpose(layer_outputs, [1, 0, 2])
-        self._output = tf.einsum("ijk,kl->ijl", layer_outputs, self._rnn_W) + self._rnn_b
+        self._output = tf.einsum("ijk,kl->ijl", layer_outputs, self._rnn_W) + self._rnn_b # shape (batch_size, sentence_size, vocab_size)
 
     def _build_training(self):
         # Loss function
@@ -196,7 +196,7 @@ class MNN:
 
         # Clip gradients
         grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g, v in grads_and_vars]
-        grads_and_vars = [(add_gradient_noise(g), v) for g, v in grads_and_vars]
+        grads_and_vars = [(add_gradient_noise(g), v) for g, v in grads_and_vars] # Sprinkle in some Gaussian noise
 
         # Add degenerate gradients nil-paddings
         nil_grads_and_vars = []
@@ -272,8 +272,8 @@ class MNN:
     def _train_batches_SGD(self, data, learning_rate):
         loss, num_batches = 0.0, 0
 
+        # Prepare batches
         if type(data) == list:
-            # Prepare batches
             batches = [data[i : i + self._batch_size] for i in range(0, len(data) - self._batch_size, self._batch_size)]
         else: # data is a generator that yields batches, to save memory
             batches = data
@@ -282,21 +282,19 @@ class MNN:
 
         # Train each batch
         for batch in batches:
-            # Extract batch data
             sentence_context, queries, expected_sentences = zip(*batch)
-            sentence_context, queries, expected_sentences = np.array(sentence_context), np.array(queries), np.array(expected_sentences)
-            
-            # Train on batch
             loss += self._train_batch(sentence_context, queries, expected_sentences, learning_rate)
+
+            num_batches += 1
 
         return loss / (num_batches * self._batch_size) # Return average loss
 
     def _train_batch(self, sentence_context, queries, expected_sentences, learning_rate):
-        # Prepare inputs
+        # Prepare inputs, convert to numpy arrays
         feed_dict = {
-            self._sentence_context: sentence_context,
-            self._queries: queries,
-            self._expected_sentences: expected_sentences,
+            self._sentence_context: np.array(sentence_context),
+            self._queries: np.array(queries),
+            self._expected_sentences: np.array(expected_sentences),
             self._learning_rate: learning_rate
         }
 
@@ -314,18 +312,23 @@ class MNN:
 
         @return float
         """
-        # Extract data
-        sentence_context, queries, expected_sentences = zip(*batch)
-        sentence_context, queries, expected_sentences = np.array(sentence_context), np.array(queries), np.array(expected_sentences)
+        # TODO Add functionality to support batch generators instead putting all data in memory
+
+        # Extract data, prepare inputs
+        sentence_context, queries, expected_sentences = zip(*data)
+        feed_dict = {
+            self._sentence_context: np.array(sentence_context),
+            self._queries: np.array(queries),
+            self._expected_sentences: np.array(expected_sentences)
+        }
 
         # Compute model loss
         with self._sess.as_default():
-            feed = {self._sentence_context: sentence_context, self._queries: queries, self._expected_sentences: expected_sentences}
-            loss = self._sess.run(self._loss_op, feed_dict = feed)
+            loss = self._sess.run(self._loss_op, feed_dict = feed_dict)
 
         return loss / len(data)
     
-    def feed(self, sentence_context, queries):
+    def feedforward(self, sentence_context, queries):
         """ Given a set of sentences and a query, returns the index of the word representing the model's answer.
         
         @param sentence_context: (np.array) Numpy array with shape (memory_size, max_sentence_length) representing a list of
@@ -336,14 +339,16 @@ class MNN:
         """
         # Prepare inputs and get predicted word
         with self._sess.as_default():
-            sentence_context, queries = np.array([sentence_context]), np.array([queries])
-            feed_dict = {self._sentence_context: sentence_context, self._queries: queries}
+            feed_dict = {
+                self._sentence_context: np.array([sentence_context]), # Batch size of 1
+                self._queries: np.array([queries])
+            }
             prediction = self._sess.run(self._predict_op, feed_dict = feed_dict)[0]
             prediction = np.argmax(prediction, axis = 1)
 
         return prediction
 
-    def feed_raw(self, sentences):
+    def feedforward_raw(self, sentences):
         """ Given a list of the previous sentences, returns the model's predicted next sentence. Here all sentences are raw strings.
         
         @param sentences: (list(str)) List of raw sentences.
@@ -362,7 +367,7 @@ class MNN:
         query = [self._word_to_index[word] for word in query]
 
         # Get model prediction
-        prediction = self.feed(sentence_context, queries)
+        prediction = self.feedforward(sentence_context, queries)
 
         # Return raw sentence
         raw_prediction = " ".join([self._index_to_word[index] for index in prediction])
