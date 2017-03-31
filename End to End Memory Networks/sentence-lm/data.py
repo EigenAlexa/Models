@@ -1,4 +1,5 @@
-import os, random
+import os, random, socket, collections
+from pymongo import MongoClient
 import numpy as np
 
 class Data:
@@ -119,9 +120,7 @@ class MongoConn:
         @param data_split: (tuple(float)) Unit 3-tuple whose values represent what proportions to split the data into training, validation, and testing, respectively
         @param collections: (dict(str: list(str))) Dictionary with database names as keys and lists of collections in the database as values
         """
-        if len(data_storage) != 2:
-            raise ValueError()
-        elif len(data_split) != 3:
+        if len(data_split) != 3:
             raise ValueError("Data split proportions must have three values")
         elif sum(data_split) != 1:
             raise ValueError("Data split proportions must be normalized")
@@ -131,7 +130,7 @@ class MongoConn:
 
         for name in ("train", "valid", "test"):
             p = os.path.join(data_dir, name)
-            if not os.path.exists(p) or not os.path.isdir(p)):
+            if not os.path.exists(p) or not os.path.isdir(p):
                 os.makedirs(p)
 
         if collections is None:
