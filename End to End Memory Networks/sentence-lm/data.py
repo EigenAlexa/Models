@@ -218,7 +218,7 @@ class MongoConn:
 def random_word(length):
     return "".join(random.choice(string.ascii_uppercase) for i in range(length))
 
-# if __name__ == "__main__":
-    # m = MongoConn("10.0.1.180")
-    # m.convert("/home/ubuntu/data/wikipedia", collections = {"corpora": ["wiki"]})
+if __name__ == "__main__":
+    m = MongoConn("10.0.1.180")
+    m.convert("/home/ubuntu/data/wikipedia", collections = {"corpora": ["wiki"]})
 

@@ -5,7 +5,7 @@ import time
 
 def main():
     memory_size, batch_size = 50, 32
-    data = Data("~/data/wikipedia", "./", memory_size, batch_size)
+    data = Data("/home/ubuntu/data/wikipedia", "./", "./metadata", memory_size, batch_size)
     training, validation, testing = data.read_data()
 
     import os, shutil
@@ -26,7 +26,7 @@ def main():
 
     print("Training...")
     start = time.time()
-    mnn.train(data.get_batches(train_path), data.get_batches(valid_path))
+    mnn.train(data.get_batches("/home/ubuntu/data/wikipedia/train"), data.get_batches("/home/ubuntu/data/wikipedia/validation"))
     end = time.time()
     print("Training took %s seconds" % str(end - start))
 
