@@ -1,4 +1,4 @@
-import os, random, socket, collections
+import os, random, socket, collections, pickle, shutil, string, sys
 from pymongo import MongoClient
 import numpy as np
 
@@ -112,13 +112,14 @@ class MongoConn:
         except:
             raise ValueError("IP address / port doesn't point to a valid Mongo server")
 
-    def convert(self, data_dir, data_split = (0.85, 0.05, 0.1), collections = None):
+    def convert(self, data_dir, data_split = (0.85, 0.05, 0.1), collections = None, verbose = True):
         """ Converts the specified collections in the specified databases from the Eigen
         Mongo schema to the format expected by the MNN class.
 
         @param data_dir: (str) Path to directory where data will be stored.
         @param data_split: (tuple(float)) Unit 3-tuple whose values represent what proportions to split the data into training, validation, and testing, respectively
         @param collections: (dict(str: list(str))) Dictionary with database names as keys and lists of collections in the database as values
+        @param verbose: (bool) Whether to display progress information.
         """
         if len(data_split) != 3:
             raise ValueError("Data split proportions must have three values")
@@ -128,27 +129,76 @@ class MongoConn:
         if not os.path.exists(data_dir) or not os.path.isdir(data_dir):
             os.makedirs(data_dir)
 
-        for name in ("train", "valid", "test"):
+        if collections is None:
+            collections = {db: self.client[db].collection_names() for db in self.client.database_names()}
+
+        if verbose: print("Reading all documents...")
+
+        # Temporary directory to store data in
+        temp_dir = os.path.join("/", "tmp", random_word(32))
+        while os.path.exists(temp_dir):
+            temp_dir = os.path.join("/", "tmp", random_word(32))
+        os.makedirs(temp_dir)
+
+        # Extract all data from Mongo database
+        num_docs = sum([self.client[db][collection].count() for db in collections for collection in collections[db]])
+        paths = []
+        for db in collections:
+            for collection in collections[db]:
+                for document in self.client[db][collection].find():
+                    if verbose and len(paths) % 500 == 0:
+                        sys.stdout.write("\033[K") # Clear to the end of line
+                        print("\tRead %i of %i (%s%%)" % (len(paths), num_docs, str(len(paths) / num_docs * 100)), end = "\r")
+
+                    p = os.path.join(temp_dir, "%i.p" % len(paths)) 
+                    paths.append(p)
+                    self._convert_document(p, document)
+        if verbose:
+            sys.stdout.write("\033[K") # Clear to the end of line
+            print("\tRead %i of %i (100%%)" % (num_docs, num_docs))
+
+        if verbose: print("Splitting into training, validation, and testing sets")
+
+        # Split data into training, validation, and test data
+        data_split = {"train": data_split[0], "validation": data_split[1], "test": data_split[2]}
+        for name in ("train", "validation", "test"):
             p = os.path.join(data_dir, name)
             if not os.path.exists(p) or not os.path.isdir(p):
                 os.makedirs(p)
 
-        if collections is None:
-            collections = {db: self.client[db].collection_names() for db in self.client.database_names()}
+            if verbose: print("\tProcessing %s data..." % name)
 
-        documents = [document for db in collections for collection in collections[db] for document in self.client[db][collection].find()]
-        random.shuffle(documents)
-        split_indices = [int(data_percentage * len(documents)) for data_percentage in data_split]
-        for i in range(1, len(data_split)):
-            split_indices[i] += split_indices[i - 1]
+            end = int(data_split[name] * num_docs)
+            for i in range(end):
+                if verbose and i % 500 == 0:
+                    sys.stdout.write("\033[K") # Clear to the end of line
+                    print("\t\tProcessed %i of %i (%s%%)" % (i, end, str(i / end * 100)), end = "\r")
 
-        training_data, validation_data, test_data = documents[: split_indices[0]], documents[split_indices[0] : split_indices[1]], documents[split_indices[1] :]
-        for data, name in zip((training_data, validation_data, test_data), ("train_raw", "valid_raw", "test_raw")):
-            for document in data:
-                p = os.path.join(data_dir, name, document["name"] + ".txt")
-                self._convert_document(p, document)
+                j = int(random.random() * len(paths))
+
+                index = paths[j].split("/")[-1]
+                new_path = os.path.join(p, index)
+
+                shutil.move(paths[j], new_path)
+                del paths[j]
+            if verbose:
+                sys.stdout.write("\033[K") # Clear to the end of line
+                print("\tProcessed %i of %i (100%%)" % (end, end))
+
+        # Take care of any remaining files due to round-off error
+        p = os.path.join(data_dir, "train")
+        for path in paths:
+            index = path.split("/")[-1]
+            new_path = os.path.join(p, index)
+            shutil.move(path, new_path)
+
+        shutil.rmtree(temp_dir)
+        if verbose: print("Done.")
 
     def _convert_document(self, path, document):
+        if os.path.exists(path):
+            os.remove(path)
+
         with open(path, "w") as f:
             for paragraph in document["paras"]:
                 for sentence_dict in paragraph:
@@ -165,7 +215,10 @@ class MongoConn:
 
     listdir_recursive = lambda directory: [os.path.join(dp, f) for dp, dn, fn in os.walk(os.path.expanduser(directory)) for f in fn]
 
-if __name__ == "__main__":
-    m = MongoConn("10.0.1.185")
-    m.convert("~/data/wikipedia")
+def random_word(length):
+    return "".join(random.choice(string.ascii_uppercase) for i in range(length))
+
+# if __name__ == "__main__":
+    # m = MongoConn("10.0.1.180")
+    # m.convert("/home/ubuntu/data/wikipedia", collections = {"corpora": ["wiki"]})
 
