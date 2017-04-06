@@ -1,4 +1,4 @@
-import os, random, socket, collections, pickle, shutil, string, sys
+import os, random, socket, collections, pickle, shutil, string, sys, nltk
 from pymongo import MongoClient
 import numpy as np
 
@@ -12,7 +12,6 @@ class Data:
         @param batch_size: (int)
         """
         self.data_path = data_path
-        self.word_to_index_path = word_to_index_path
         self.memory_size = memory_size
         self.batch_size = batch_size
 
@@ -25,24 +24,17 @@ class Data:
             with open(p, "rb") as f:
                 self.word_to_index = pickle.load(f)
         else:
-            self._build_metadata(metadata_path)
+            self._save_metadata(metadata_path)
 
-    def __build_metadata(self, metadata_path):
+    def _save_metadata(self, metadata_path):
         os.makedirs(metadata_path)
 
-        words = set([])
-        for document in os.listdir(self.data_path):
-            with open(os.path.join(self.data_path, document), "w") as f:
-                for sentence in f.readlines():
-                    tokens = nltk.tokenize.word_tokenize(sentence)
-                    self.max_sentence_size = max(self.max_sentence_size, len(tokens))
-                    words.update(tokens)
-
-        self.word_to_index = {word: index for word, index in enumerate(words)}
+        words, self.max_sentence_size = _build_metadata(self.data_path)
+        self.word_to_index = {word: index + 1 for index, word in enumerate(words)} # Add one since 0 is reserved for padding
 
         p = os.path.join(metadata_path, "max_sentence_size.txt")
         with open(p, "w") as f:
-            f.write(self.max_sentence_size)
+            f.write(str(self.max_sentence_size))
 
         p = os.path.join(metadata_path, "word_to_index.p")
         with open(p, "wb") as f:
@@ -62,16 +54,15 @@ class Data:
         documents = os.listdir(data_path)
         random.shuffle(documents)
 
-        to_index = lambda sentence: [self.word_to_index(word) for word in nltk.tokenize.word_tokenize(sentence)]
         batch = []
         for document in documents:
-            with open(os.path.join(data_path, document), "w") as f:
-                sentences = f.read_lines()
+            with open(os.path.join(data_path, document), "r") as f:
+                sentences = f.readlines()
 
             for i in range(len(sentences) - (self.memory_size + 2)):
-                sentence_context = [to_index(sentence) for sentence in sentences[i : i + self.memory_size]]
-                query = to_index(sentences[i + self.memory_size + 1])
-                expected_sentence = to_index(sentences[i + self.memory_size + 2])
+                sentence_context = [self._to_index(sentence) for sentence in sentences[i : i + self.memory_size]]
+                query = self._to_index(sentences[i + self.memory_size])
+                expected_sentence = self._to_index(sentences[i + self.memory_size + 1])
 
                 batch.append((sentence_context, query, expected_sentence))
                 if len(batch) >= self.batch_size:
@@ -96,6 +87,11 @@ class Data:
             raise Exception("Data hasn't been read yet")
 
         return self.word_to_index
+
+    def _to_index(self, sentence):
+        indices = [self.word_to_index[word.lower()] for word in nltk.tokenize.word_tokenize(sentence)]
+        indices += [0] * (self.max_sentence_size - len(indices))
+        return indices
 
 class MongoConn:
     def __init__(self, ip_addr, port = 27017):
@@ -135,9 +131,9 @@ class MongoConn:
         if verbose: print("Reading all documents...")
 
         # Temporary directory to store data in
-        temp_dir = os.path.join("/", "tmp", random_word(32))
+        temp_dir = os.path.join("/", "tmp", _random_word(32))
         while os.path.exists(temp_dir):
-            temp_dir = os.path.join("/", "tmp", random_word(32))
+            temp_dir = os.path.join("/", "tmp", _random_word(32))
         os.makedirs(temp_dir)
 
         # Extract all data from Mongo database
@@ -215,7 +211,25 @@ class MongoConn:
 
     listdir_recursive = lambda directory: [os.path.join(dp, f) for dp, dn, fn in os.walk(os.path.expanduser(directory)) for f in fn]
 
-def random_word(length):
+def _build_metadata(path):
+    words, max_sentence_size = set([]), -1
+    if os.path.isdir(path):
+        for sub_file in os.listdir(path):
+            sub_path = os.path.join(path, sub_file)
+            new_words, new_max_sentence_size = _build_metadata(sub_path)
+
+            words.update(new_words)
+            max_sentence_size = max(max_sentence_size, new_max_sentence_size)
+    else:
+        with open(path, "r") as f:
+            for sentence in f.readlines():
+                tokens = [word.lower() for word in nltk.tokenize.word_tokenize(sentence)]
+                max_sentence_size = max(max_sentence_size, len(tokens))
+                words.update(tokens)
+
+    return words, max_sentence_size
+
+def _random_word(length):
     return "".join(random.choice(string.ascii_uppercase) for i in range(length))
 
 if __name__ == "__main__":

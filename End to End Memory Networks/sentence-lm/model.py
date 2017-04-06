@@ -58,14 +58,14 @@ class MNN:
         self._initializer = initializer
 
         # TODO delete
-        # print("vocab_size:", self._vocab_size)
-        # print("sentence_size:", self._sentence_size)
-        # print("batch_size:", self._batch_size)
-        # print("memory_size:", self._memory_size)
-        # print("embedding_dim:", self._embedding_size)
-        # print("hops:", self._hops)
-        # print("num_rnn_layers:", self._num_rnn_layers)
-        # print("num_lstm_units:", self._num_lstm_units)
+        print("vocab_size:", self._vocab_size)
+        print("sentence_size:", self._sentence_size)
+        print("batch_size:", self._batch_size)
+        print("memory_size:", self._memory_size)
+        print("embedding_dim:", self._embedding_size)
+        print("hops:", self._hops)
+        print("num_rnn_layers:", self._num_rnn_layers)
+        print("num_lstm_units:", self._num_lstm_units)
 
         self._sess = sess
         self._name = name
@@ -113,8 +113,8 @@ class MNN:
         self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
 
         # Build weights for output of RNN
-        self._rnn_W = tf.Variable(self._initializer([self._num_lstm_units, self._vocab_size]))
-        self._rnn_b = tf.Variable(self._initializer([self._vocab_size]))
+        self._rnn_W = tf.Variable(self._initializer([self._num_lstm_units, self._vocab_size]), name = "rnn_W")
+        self._rnn_b = tf.Variable(self._initializer([self._vocab_size]), name = "rnn_b")
 
     def _build_model(self):
         with tf.variable_scope(self._name):
@@ -168,8 +168,9 @@ class MNN:
 
     def _build_rnn(self):
         # Build LSTM cells
-        lstm = normal_lstm = lambda: tf.contrib.rnn.BasicLSTMCell(self._num_lstm_units, self._lstm_forget_bias, state_is_tuple = True)
+        lstm = lambda: tf.contrib.rnn.BasicLSTMCell(self._num_lstm_units, self._lstm_forget_bias, state_is_tuple = True)
         if self._rnn_dropout_keep_prob < 1.0:
+            normal_lstm = lstm
             lstm = lambda: tf.contrib.rnn.DropoutWrapper(normal_lstm())
 
         cell = tf.contrib.rnn.MultiRNNCell([lstm() for _ in range(self._num_rnn_layers)])
@@ -187,7 +188,7 @@ class MNN:
         self._output = tf.einsum("ijk,kl->ijl", layer_outputs, self._rnn_W) + self._rnn_b # shape (batch_size, sentence_size, vocab_size)
 
     def _build_training(self):
-        # Loss function
+        # Loss
         self._loss_op = self._loss_function()
 
         # Gradient pipeline
@@ -209,7 +210,8 @@ class MNN:
         self._train_op = self._opt.apply_gradients(nil_grads_and_vars, name = "train_op")
 
     def _loss_function(self):
-        logits = tf.argmax(self._output, axis = 2)
+        logits = tf.cast(tf.argmax(self._output, axis = 2), tf.float32)
+        # expected_sentences = tf.one_hot(self._expected_sentences, depth = self._vocab_size)
 
         # Approach 1 (default TF sequence-to-sequence loss)
         loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example([logits], [self._expected_sentences], [tf.ones([self._batch_size])])
@@ -275,10 +277,9 @@ class MNN:
         # Prepare batches
         if type(data) == list:
             batches = [data[i : i + self._batch_size] for i in range(0, len(data) - self._batch_size, self._batch_size)]
+            random.shuffle(batches)
         else: # data is a generator that yields batches, to save memory
             batches = data
-
-        random.shuffle(batches)
 
         # Train each batch
         for batch in batches:
