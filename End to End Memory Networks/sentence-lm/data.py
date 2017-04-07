@@ -3,7 +3,7 @@ from pymongo import MongoClient
 import numpy as np
 
 class Data:
-    def __init__(self, data_path, metadata_path, memory_size = 50, batch_size = 128):
+    def __init__(self, data_path, metadata_path, unk_threshold = 5, memory_size = 50, batch_size = 128):
         """ Constructor.
 
         @param data_path (str) Path to directory where raw data is stored.
@@ -14,31 +14,36 @@ class Data:
         self.data_path = data_path
         self.memory_size = memory_size
         self.batch_size = batch_size
+        self.unk_threshold = unk_threshold
 
         if os.path.exists(metadata_path):
             p = os.path.join(metadata_path, "max_sentence_size.txt")
             with open(p, "r") as f:
                 self.max_sentence_size = int(f.read())
 
-            p = os.path.join(metadata_path, "word_to_index.p")
+            p = os.path.join(metadata_path, "word_frequencies.p")
             with open(p, "rb") as f:
-                self.word_to_index = pickle.load(f)
+                self.word_frequencies= pickle.load(f)
         else:
             self._save_metadata(metadata_path)
+
+        words = [word for word in self.word_frequencies.keys() if self.word_frequencies[word] >= self.unk_threshold] + ["<unk>"]
+        self.word_to_index = {word: index + 1 for index, word in enumerate(words)} # Add one since 0 is reserved for padding
+        self.word_to_index["<unk>"] = len(self.word_to_index) + 1
+        self.index_to_word = {self.word_to_index[word]: word for word in self.word_to_index}
 
     def _save_metadata(self, metadata_path):
         os.makedirs(metadata_path)
 
-        words, self.max_sentence_size = _build_metadata(self.data_path)
-        self.word_to_index = {word: index + 1 for index, word in enumerate(words)} # Add one since 0 is reserved for padding
+        self.word_frequencies, self.max_sentence_size = _word_frequencies(self.data_path)
 
         p = os.path.join(metadata_path, "max_sentence_size.txt")
         with open(p, "w") as f:
             f.write(str(self.max_sentence_size))
 
-        p = os.path.join(metadata_path, "word_to_index.p")
+        p = os.path.join(metadata_path, "word_frequencies.p")
         with open(p, "wb") as f:
-            pickle.dump(self.word_to_index, f)
+            pickle.dump(self.word_frequencies, f)
 
     def get_batches(self, data_path):
         """ Generator that yields batches one at a time, to accomodate datasets that won't fit in memory. Data
@@ -48,9 +53,6 @@ class Data:
 
         @return list(tuple(np.ndarray, np.ndarray, np.ndarray))
         """
-        if self.word_to_index is None:
-            raise ValueError("Must build word-to-index mapping first")
-
         documents = os.listdir(data_path)
         random.shuffle(documents)
 
@@ -70,28 +72,19 @@ class Data:
                     yield batch
                     batch = []
 
-    def vocab_size(self):
-        if self.word_to_index is None:
-            raise Exception("Data hasn't been read yet")
-
-        return len(self.word_to_index) + 1 # Add one for the nil word
-    
-    def max_sent_size(self):
-        if self.word_to_index is None:
-            raise Exception("Data hasn't been read yet")
-
-        return self.max_sentence_size
-
-    def word2index(self):
-        if self.word_to_index is None:
-            raise Exception("Data hasn't been read yet")
-
-        return self.word_to_index
-
     def _to_index(self, sentence):
-        indices = [self.word_to_index[word.lower()] for word in nltk.tokenize.word_tokenize(sentence)]
+        indices = [self.word_to_index_lookup(word.lower()) for word in nltk.tokenize.word_tokenize(sentence)]
         indices += [0] * (self.max_sentence_size - len(indices))
         return indices
+
+    def word_to_index_lookup(self, word):
+        if word not in self.word_to_index:
+            word = "<unk>"
+
+        return self.word_to_index[word]
+
+    def index_to_word_lookup(self, index):
+        return self.index_to_word[index]
 
 class MongoConn:
     def __init__(self, ip_addr, port = 27017):
@@ -211,23 +204,32 @@ class MongoConn:
 
     listdir_recursive = lambda directory: [os.path.join(dp, f) for dp, dn, fn in os.walk(os.path.expanduser(directory)) for f in fn]
 
-def _build_metadata(path):
-    words, max_sentence_size = set([]), -1
+def _word_frequencies(path):
+    freqs, max_sentence_size = {}, -1
     if os.path.isdir(path):
         for sub_file in os.listdir(path):
             sub_path = os.path.join(path, sub_file)
-            new_words, new_max_sentence_size = _build_metadata(sub_path)
+            sub_freqs, new_max_sentence_size = _word_frequencies(sub_path)
 
-            words.update(new_words)
             max_sentence_size = max(max_sentence_size, new_max_sentence_size)
+            for word in sub_freqs:
+                if word not in freqs:
+                    freqs[word] = 0
+
+                freqs[word] += sub_freqs[word]
     else:
         with open(path, "r") as f:
             for sentence in f.readlines():
-                tokens = [word.lower() for word in nltk.tokenize.word_tokenize(sentence)]
-                max_sentence_size = max(max_sentence_size, len(tokens))
-                words.update(tokens)
+                words = [word.lower() for word in nltk.tokenize.word_tokenize(sentence)]
 
-    return words, max_sentence_size
+                max_sentence_size = max(max_sentence_size, len(words))
+                for word in words:
+                    if word not in freqs:
+                        freqs[word] = 0
+
+                    freqs[word] += 1
+
+    return freqs, max_sentence_size
 
 def _random_word(length):
     return "".join(random.choice(string.ascii_uppercase) for i in range(length))

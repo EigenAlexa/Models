@@ -4,17 +4,13 @@ import tensorflow as tf
 import time
 
 def main():
-    memory_size, batch_size = 50, 32
-    data = Data("/home/ubuntu/data/wikipedia", "/home/ubuntu/data/wikipedia/metadata", memory_size, batch_size)
+    ut, ms, bs = 5, 50, 32
+    data = Data("/home/ubuntu/data/wikipedia", "/home/ubuntu/data/wikipedia/metadata", unk_threshold = ut, memory_size = ms, batch_size = bs)
 
-    # TODO delete
-    import os, shutil
-    if os.path.exists("checkpoints") and os.path.isdir("checkpoints"):
-        shutil.rmtree("checkpoints")
-
+    print("Initializing...")
     mnn = MNN(data = data,
-              batch_size = batch_size,
-              memory_size = memory_size,
+              batch_size = bs,
+              memory_size = ms,
               embedding_dim = 40,
               nhops = 3,
               num_rnn_layers = 2,

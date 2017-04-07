@@ -38,10 +38,10 @@ class MNN:
         @param sess: (tf.Session) Active tensorflow session to use.
         @param name: (str) Name of model.
         """
-        self._vocab_size = data.vocab_size()
-        self._sentence_size = self._num_rnn_steps = data.max_sent_size()
-        self._word_to_index = data.word2index()
-        self._index_to_word = {index: word for word, index in self._word_to_index.items()}
+        self._word_to_index = data.word_to_index_lookup
+        self._index_to_word = data.index_to_word_lookup
+        self._sentence_size = self._num_rnn_steps = data.max_sentence_size
+        self._vocab_size = len(data.word_to_index)
 
         # Hyperparameters
         self._batch_size = batch_size
@@ -58,14 +58,14 @@ class MNN:
         self._initializer = initializer
 
         # TODO delete
-        print("vocab_size:", self._vocab_size)
-        print("sentence_size:", self._sentence_size)
-        print("batch_size:", self._batch_size)
-        print("memory_size:", self._memory_size)
-        print("embedding_dim:", self._embedding_size)
-        print("hops:", self._hops)
-        print("num_rnn_layers:", self._num_rnn_layers)
-        print("num_lstm_units:", self._num_lstm_units)
+        # print("vocab_size:", self._vocab_size)
+        # print("sentence_size:", self._sentence_size)
+        # print("batch_size:", self._batch_size)
+        # print("memory_size:", self._memory_size)
+        # print("embedding_dim:", self._embedding_size)
+        # print("hops:", self._hops)
+        # print("num_rnn_layers:", self._num_rnn_layers)
+        # print("num_lstm_units:", self._num_lstm_units)
 
         self._sess = sess
         self._name = name
@@ -210,8 +210,8 @@ class MNN:
         self._train_op = self._opt.apply_gradients(nil_grads_and_vars, name = "train_op")
 
     def _loss_function(self):
-        logits = tf.cast(tf.argmax(self._output, axis = 2), tf.float32)
-        # expected_sentences = tf.one_hot(self._expected_sentences, depth = self._vocab_size)
+        # Use expected value of softmax probabilities as a differentiable argmax 
+        logits = soft_argmax(self._output, beta = 1)
 
         # Approach 1 (default TF sequence-to-sequence loss)
         loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example([logits], [self._expected_sentences], [tf.ones([self._batch_size])])
@@ -364,8 +364,8 @@ class MNN:
         query = nltk.tokenize.word_tokenize(query)
 
         # Map to one-hot indices
-        sentence_context = [[self._word_to_index[word] for word in sentence] for sentence in sentence_context]
-        query = [self._word_to_index[word] for word in query]
+        sentence_context = [[self._word_to_index(word) for word in sentence] for sentence in sentence_context]
+        query = [self._word_to_index(word) for word in query]
 
         # Get model prediction
         prediction = self.feedforward(sentence_context, queries)
@@ -437,3 +437,10 @@ def add_gradient_noise(t, stddev = 1e-3, name = None):
         t = tf.convert_to_tensor(t, name = "t")
         gn = tf.random_normal(tf.shape(t), stddev = stddev)
         return tf.add(t, gn, name = name)
+
+def soft_argmax(x, beta = 1, axis = -1):
+    probabilities = tf.nn.softmax(beta * x)
+    values = tf.range(1, x.get_shape().as_list()[-1] + 1, dtype = tf.float32)
+    expected_value = tf.reduce_sum(tf.multiply(probabilities, values), axis = axis)
+
+    return expected_value
