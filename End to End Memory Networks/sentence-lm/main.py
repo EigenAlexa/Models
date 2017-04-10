@@ -4,7 +4,7 @@ import tensorflow as tf
 import time
 
 def main():
-    ut, ms, bs = 5, 50, 32
+    ut, ms, bs = 5, 50, 4
     data = Data("/home/ubuntu/data/wikipedia", "/home/ubuntu/data/wikipedia/metadata", unk_threshold = ut, memory_size = ms, batch_size = bs)
 
     print("Initializing...")

@@ -1,4 +1,4 @@
-import os, math, random
+import os, math, random, sys
 import numpy as np
 import tensorflow as tf
 
@@ -56,16 +56,6 @@ class MNN:
         self._max_grad_norm = max_grad_norm
         self._nonlin = nonlin
         self._initializer = initializer
-
-        # TODO delete
-        # print("vocab_size:", self._vocab_size)
-        # print("sentence_size:", self._sentence_size)
-        # print("batch_size:", self._batch_size)
-        # print("memory_size:", self._memory_size)
-        # print("embedding_dim:", self._embedding_size)
-        # print("hops:", self._hops)
-        # print("num_rnn_layers:", self._num_rnn_layers)
-        # print("num_lstm_units:", self._num_lstm_units)
 
         self._sess = sess
         self._name = name
@@ -211,10 +201,17 @@ class MNN:
 
     def _loss_function(self):
         # Use expected value of softmax probabilities as a differentiable argmax 
-        logits = soft_argmax(self._output, beta = 1)
+        logits = differentiable_argmax(self._output, beta = 1)
+        # print(logits.get_shape())
+        # print(self._expected_sentences.get_shape())
+        # __import__("sys").exit()
 
         # Approach 1 (default TF sequence-to-sequence loss)
-        loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example([logits], [self._expected_sentences], [tf.ones([self._batch_size])])
+        loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
+                logits = [logits],
+                targets = [self._expected_sentences],
+                weights = [tf.ones([self._batch_size])],
+                softmax_loss_function = lambda t, l: tf.nn.softmax_cross_entropy_with_logits(labels = t, logits = l))
 
         # Approach 2 (cross entropy between raw sentence vectors)
         # cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, self._expected_sentences)
@@ -236,6 +233,21 @@ class MNN:
             for validation.
         @param nepochs: (int) How many epochs to train for, or -1 to repeat until convergence (defined as 5 epochs without improvement).
         """
+        if verbose:
+            print("Hyperparameters:")
+            print("\tBatch size: %s" % str(self._batch_size))
+            print("\tMemory size: %s" % str(self._memory_size))
+            print("\tEmbedding dimension: %s" % str(self._embedding_size))
+            print("\tNumber of hops: %s" % str(self._hops))
+            print("\tNumber of RNN layers: %s" % str(self._num_rnn_layers))
+            print("\tNumber of LSTM units per RNN layer: %s" % str(self._num_lstm_units))
+            print("\tLSTM forget bias: %s" % str(self._lstm_forget_bias))
+            print("\tRNN dropout keep probability: %s" % str(self._rnn_dropout_keep_prob))
+            print("\tInitial learning rate: %s" % str(self._init_lr))
+            print("\tMaximum gradient norm: %s" % str(self._max_grad_norm))
+            print("\tNon-linearity: %s" % str(self._nonlin))
+            print()
+
         with self._sess.as_default():
             learning_rate = self._init_lr
             old_valid_loss = float("inf")
@@ -246,9 +258,18 @@ class MNN:
                 if nepochs != -1 and epoch > nepochs:
                     break
 
+                if verbose and epoch % 10 == 0:
+                    print("Epoch %i" % epoch)
+
                 # Train epoch
-                train_loss = self._train_batches_SGD(train_data, learning_rate)
+                train_loss = self._train_batches_SGD(train_data, learning_rate, verbose)
                 valid_loss = self.test(valid_data)
+
+                if verbose and epoch % 10 == 0:
+                    print("\tTraining loss: %s" % str(train_loss))
+                    print("\tValidation loss: %s" % str(valid_loss))
+                    print("\tLearning rate: %s" % str(learning_rate))
+                    print()
 
                 # Learning rate annealing
                 if valid_loss > old_valid_loss * 0.9999:
@@ -257,13 +278,6 @@ class MNN:
                 else:
                     count = 0
 
-                if verbose and epoch % 10 == 0:
-                    print("Epoch %i" % epoch)
-                    print("\tTraining loss: %s" % str(train_loss))
-                    print("\tValidation loss: %s" % str(valid_loss))
-                    print("\tLearning rate: %s" % str(learning_rate))
-                    print()
-
                 # If converged, stop training
                 if nepochs == -1 and count > 5:
                     break
@@ -271,7 +285,7 @@ class MNN:
                 old_valid_loss = valid_loss
                 epoch += 1
 
-    def _train_batches_SGD(self, data, learning_rate):
+    def _train_batches_SGD(self, data, learning_rate, verbose = True):
         loss, num_batches = 0.0, 0
 
         # Prepare batches
@@ -283,10 +297,17 @@ class MNN:
 
         # Train each batch
         for batch in batches:
+            if verbose:
+                clear_line()
+                print("\tTraining batch %i" % num_batches, end = "\r")
+
             sentence_context, queries, expected_sentences = zip(*batch)
             loss += self._train_batch(sentence_context, queries, expected_sentences, learning_rate)
 
             num_batches += 1
+        
+        if verbose:
+            clear_line()
 
         return loss / (num_batches * self._batch_size) # Return average loss
 
@@ -438,9 +459,12 @@ def add_gradient_noise(t, stddev = 1e-3, name = None):
         gn = tf.random_normal(tf.shape(t), stddev = stddev)
         return tf.add(t, gn, name = name)
 
-def soft_argmax(x, beta = 1, axis = -1):
+def differentiable_argmax(x, beta = 1, axis = -1):
     probabilities = tf.nn.softmax(beta * x)
     values = tf.range(1, x.get_shape().as_list()[-1] + 1, dtype = tf.float32)
     expected_value = tf.reduce_sum(tf.multiply(probabilities, values), axis = axis)
 
     return expected_value
+
+def clear_line():
+    sys.stdout.write("\033[K") # Clear to the end of line
