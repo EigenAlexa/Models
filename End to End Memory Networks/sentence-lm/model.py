@@ -1,4 +1,4 @@
-import os, math, random, sys
+import os, math, random, sys, types
 import numpy as np
 import tensorflow as tf
 
@@ -38,15 +38,14 @@ class MNN:
         @param sess: (tf.Session) Active tensorflow session to use.
         @param name: (str) Name of model.
         """
-        self._word_to_index = data.word_to_index_lookup
-        self._index_to_word = data.index_to_word_lookup
+        self._data = data
         self._sentence_size = self._num_rnn_steps = data.max_sentence_size
         self._vocab_size = len(data.word_to_index)
 
         # Hyperparameters
         self._batch_size = batch_size
         self._memory_size = memory_size
-        self._embedding_size = embedding_dim
+        self._embedding_dim = embedding_dim
         self._hops = nhops
         self._num_rnn_layers = num_rnn_layers
         self._num_lstm_units = num_lstm_units
@@ -60,14 +59,13 @@ class MNN:
         self._sess = sess
         self._name = name
         self._checkpoint_dir = "./checkpoints" 
-        self._encoding = tf.constant(position_encoding(self._sentence_size, self._embedding_size), name = "encoding") # Sentence encoding vector
+        self._encoding = tf.constant(position_encoding(self._sentence_size, self._embedding_dim), name = "encoding") # Sentence encoding vector
 
         # Set up the model architecture
         self._build_inputs()
         self._build_params()
         self._build_model()
         self._build_training()
-        self._predict_op = self._output
 
         self._sess.run(tf.global_variables_initializer())
 
@@ -81,9 +79,9 @@ class MNN:
     def _build_params(self):
         # Create nodes for model parameters, which are the embedding matrices
         with tf.variable_scope(self._name):
-            nil_word_slot = tf.zeros([1, self._embedding_size])
-            A = tf.concat(axis = 0, values = [nil_word_slot, self._initializer([self._vocab_size - 1, self._embedding_size])])
-            C = tf.concat(axis = 0, values = [nil_word_slot, self._initializer([self._vocab_size - 1, self._embedding_size])])
+            null_word_slot = tf.zeros([1, self._embedding_dim])
+            A = tf.concat(axis = 0, values = [null_word_slot, self._initializer([self._vocab_size - 1, self._embedding_dim])])
+            C = tf.concat(axis = 0, values = [null_word_slot, self._initializer([self._vocab_size - 1, self._embedding_dim])])
 
             # Adjacent weight sharing - each embedding in self.C is the output embedding for layer l and memory embedding for layer l + 1
             self.A_1 = tf.Variable(A, name = "A") # Initial memory embedding
@@ -95,12 +93,12 @@ class MNN:
                     self.C.append(tf.Variable(C, name = "C"))
 
             # Answer prediction weight matrix
-            self.W = tf.Variable(self._initializer([self._embedding_size, self._embedding_size]), name = "W")
+            self.W = tf.Variable(self._initializer([self._embedding_dim, self._embedding_dim]), name = "W")
 
             # Linear mapping for layer output (not necessary with adjacent weight sharing)
-            # self.H = tf.Variable(self._initializer([self._embedding_size, self._embedding_size]), name = "H") 
+            # self.H = tf.Variable(self._initializer([self._embedding_dim, self._embedding_dim]), name = "H") 
 
-        self._nil_vars = set([self.A_1.name] + [x.name for x in self.C])
+        self._null_vars = set([self.A_1.name] + [x.name for x in self.C])
 
         # Build weights for output of RNN
         self._rnn_W = tf.Variable(self._initializer([self._num_lstm_units, self._vocab_size]), name = "rnn_W")
@@ -110,7 +108,7 @@ class MNN:
         with tf.variable_scope(self._name):
             # Use A_1 for the query embedding as per Adjacent Weight Sharing
             q_emb = tf.nn.embedding_lookup(self.A_1, self._queries)
-            u = tf.reduce_sum(q_emb * self._encoding, axis = 1)
+            u = sentence_representation(q_emb, self._encoding)
 
             # Build feedforward memory hops
             for hopn in range(self._hops):
@@ -131,11 +129,13 @@ class MNN:
         # Store context sentences in memory, encoded with memory embedding
         if hopn == 0:
             m_emb_A = tf.nn.embedding_lookup(self.A_1, self._sentence_context) # Get word embeddings
-            m_A = tf.reduce_sum(m_emb_A * self._encoding, axis = 2) # Convert to sentence representation
+            # m_A = tf.reduce_sum(m_emb_A * self._encoding, axis = 2) # Convert to sentence representation
+            m_A = sentence_representation(m_emb_A, self._encoding)
         else:
             with tf.variable_scope('hop_{}'.format(hopn - 1)):
-                m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], self._sentence_context) # Adjacent weight sharing - previous output embedding becomes memory embedding
-                m_A = tf.reduce_sum(m_emb_A * self._encoding, axis = 2) # Convert to sentence representation
+                m_emb_A = tf.nn.embedding_lookup(self.C[hopn - 1], self._sentence_context) # (Adjacent weight sharing) Previous output embedding becomes memory embedding
+                # m_A = tf.reduce_sum(m_emb_A * self._encoding, axis = 2) # Convert to sentence representation
+                m_A = sentence_representation(m_emb_A, self._encoding)
 
         # Compute probability vector, by passing the cosine similarities between (encoded) query and (encoded) memory vectors
         u_temp = tf.transpose(tf.expand_dims(prev_u, -1), [0, 2, 1]) # Hack to get around no reduce_dot
@@ -145,7 +145,8 @@ class MNN:
         # Compute output vectors (context sentences encoded with output embedding)
         with tf.variable_scope('hop_{}'.format(hopn)):
             m_emb_C = tf.nn.embedding_lookup(self.C[hopn], self._sentence_context)
-        m_C = tf.reduce_sum(m_emb_C * self._encoding, axis = 2)
+        # m_C = tf.reduce_sum(m_emb_C * self._encoding, axis = 2)
+        m_C = sentence_representation(m_emb_C, self._encoding)
 
         # Compute response vector o
         p_temp = tf.transpose(tf.expand_dims(p, -1), [0, 2, 1])
@@ -189,36 +190,50 @@ class MNN:
         grads_and_vars = [(tf.clip_by_norm(g, self._max_grad_norm), v) for g, v in grads_and_vars]
         grads_and_vars = [(add_gradient_noise(g), v) for g, v in grads_and_vars] # Sprinkle in some Gaussian noise
 
-        # Add degenerate gradients nil-paddings
-        nil_grads_and_vars = []
+        # Add degenerate gradients null-paddings
+        null_grads_and_vars = []
         for g, v in grads_and_vars:
-            if v.name in self._nil_vars:
-                nil_grads_and_vars.append((zero_nil_slot(g), v))
+            if v.name in self._null_vars:
+                null_grads_and_vars.append((zero_null_slot(g), v))
             else:
-                nil_grads_and_vars.append((g, v))
+                null_grads_and_vars.append((g, v))
 
-        self._train_op = self._opt.apply_gradients(nil_grads_and_vars, name = "train_op")
+        self._train_op = self._opt.apply_gradients(null_grads_and_vars, name = "train_op")
 
     def _loss_function(self):
-        # Use expected value of softmax probabilities as a differentiable argmax 
-        logits = differentiable_argmax(self._output, beta = 1)
-        # print(logits.get_shape())
-        # print(self._expected_sentences.get_shape())
-        # __import__("sys").exit()
+        # Approach 1 (default sequence to sequence loss on one-hot words)
+        # logits = differentiable_argmax(self._output, beta = 1)
+        # loss = tf.contrib.seq2seq.sequence_loss(
+                # logits = [logits],
+                # targets = [self._expected_sentences],
+                # weights = [tf.ones([self._batch_size])])
+                # softmax_loss_function = lambda t, l: tf.nn.softmax_cross_entropy_with_logits(labels = t, logits = l))
 
-        # Approach 1 (default TF sequence-to-sequence loss)
-        loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
-                logits = [logits],
-                targets = [self._expected_sentences],
-                weights = [tf.ones([self._batch_size])],
-                softmax_loss_function = lambda t, l: tf.nn.softmax_cross_entropy_with_logits(labels = t, logits = l))
+        # Approach 2 (sum of cosine distances between embedded words)
+        emb_output = embedding_with_floats(self.A_1, self._output, beta = 1) # Hack to embed non-integral one-hot vectors
+        emb_expected = tf.nn.embedding_lookup(self.A_1, self._expected_sentences)
+        distances = tf.reduce_sum(cosine_distance(emb_output, emb_expected), axis = -1)
+        loss = tf.reduce_mean(distances) # Average over batches
 
-        # Approach 2 (cross entropy between raw sentence vectors)
-        # cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits, self._expected_sentences)
-        # loss = tf.reduce_sum(cross_entropy)
+        # Approach 3 (standard loss function between embedded sentence vector (ie with position encoding))
+        # emb_sentence_output = sentence_representation(embedding_with_floats(self.A_1, self._output, beta = 1), self._encoding)
+        # emb_sentence_expected = sentence_representation(tf.nn.embedding_lookup(self.A_1, self._expected_sentences), self._encoding)
+        # cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits = emb_sentence_output, labels = emb_expected_sentences)
+        # loss = tf.reduce_mean(cross_entropy) # Average over batches
 
-        # Approach 3 (cross entropy between embedded sentence representations)
-        # TODO
+        # TODO Approach 4 (sum of approaches (1 or 2) and approach 3)
+        # emb_output = embedding_with_floats(self.A_1, self._output, beta = 1) # Hack to embed non-integral one-hot vectors
+        # emb_expected = tf.nn.embedding_lookup(self.A_1, self._expected_sentences)
+        # emb_sentence_output = sentence_representation(emb_output, self._encoding)
+        # emb_sentence_expected = sentence_representation(emb_expected, self._encoding)
+
+        # cosine_distance_loss = tf.reduce_mean(tf.reduce_sum(cosine_distance(emb_output, emb_expected)))
+        # cross_entropy_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits = emb_sentence_output, labels = emb_sentence_expected))
+        # loss = cosine_distance_loss + cross_entropy_loss
+
+        # TODO Approach 5 (train a separate ML model (NOT jointly with this model) to act as a good loss function specifically for NLP, capturing semantic meaning behind sentences)
+
+        # TODO Approach 6 (sum of approaches 4 and 5)
 
         return loss
 
@@ -234,38 +249,24 @@ class MNN:
         @param nepochs: (int) How many epochs to train for, or -1 to repeat until convergence (defined as 5 epochs without improvement).
         """
         if verbose:
-            print("Hyperparameters:")
-            print("\tBatch size: %s" % str(self._batch_size))
-            print("\tMemory size: %s" % str(self._memory_size))
-            print("\tEmbedding dimension: %s" % str(self._embedding_size))
-            print("\tNumber of hops: %s" % str(self._hops))
-            print("\tNumber of RNN layers: %s" % str(self._num_rnn_layers))
-            print("\tNumber of LSTM units per RNN layer: %s" % str(self._num_lstm_units))
-            print("\tLSTM forget bias: %s" % str(self._lstm_forget_bias))
-            print("\tRNN dropout keep probability: %s" % str(self._rnn_dropout_keep_prob))
-            print("\tInitial learning rate: %s" % str(self._init_lr))
-            print("\tMaximum gradient norm: %s" % str(self._max_grad_norm))
-            print("\tNon-linearity: %s" % str(self._nonlin))
-            print()
+            print_hyperparameters(self)
 
         with self._sess.as_default():
             learning_rate = self._init_lr
             old_valid_loss = float("inf")
 
-            # Train until convergence or nepochs
-            count, epoch = 0, 0
-            while True:
-                if nepochs != -1 and epoch > nepochs:
-                    break
-
-                if verbose and epoch % 10 == 0:
+            # Train until convergence or nepochs have passed
+            annealed_count = epoch = 0
+            while (nepochs == -1 and annealed_count <= 5) or (nepochs != -1 and epoch < nepochs):
+                if verbose:
                     print("Epoch %i" % epoch)
 
                 # Train epoch
                 train_loss = self._train_batches_SGD(train_data, learning_rate, verbose)
                 valid_loss = self.test(valid_data)
 
-                if verbose and epoch % 10 == 0:
+                if verbose:
+                    clear_line()
                     print("\tTraining loss: %s" % str(train_loss))
                     print("\tValidation loss: %s" % str(valid_loss))
                     print("\tLearning rate: %s" % str(learning_rate))
@@ -274,16 +275,14 @@ class MNN:
                 # Learning rate annealing
                 if valid_loss > old_valid_loss * 0.9999:
                     learning_rate *= 2 / 3
-                    count += 1
+                    annealed_count += 1
                 else:
-                    count = 0
-
-                # If converged, stop training
-                if nepochs == -1 and count > 5:
-                    break
+                    annealed_count = 0
 
                 old_valid_loss = valid_loss
                 epoch += 1
+
+        return (train_loss, valid_loss)
 
     def _train_batches_SGD(self, data, learning_rate, verbose = True):
         loss, num_batches = 0.0, 0
@@ -297,32 +296,72 @@ class MNN:
 
         # Train each batch
         for batch in batches:
+            # if num_batches % 20 == 0:
+            if False:
+                test_files = os.listdir("/home/ubuntu/data/wikipedia/test")
+                sentences = []
+                # while len(sentences) < 3:
+                while len(sentences) < self._memory_size + 2:
+                    with open(os.path.join("/home/ubuntu/data/wikipedia/test", test_files[int(random.random() * len(test_files))]), "r") as f:
+                        sentences = f.readlines()
+                        if len(sentences) >= self._memory_size + 2:
+                            sentences = sentences[: self._memory_size + 2]
+                predicted = self.feedforward_raw(sentences)
+                # print("\nCONTEXT")
+                # for sentence in sentences[: -1]:
+                    # print(sentence)
+                # print("\nEXPECTED: %s" % sentences[-1])
+                # print("PREDICTED: %s" % predicted)
+                # print()
+
             if verbose:
                 clear_line()
-                print("\tTraining batch %i" % num_batches, end = "\r")
+                print("\tTraining batch %i" % num_batches,  end = "\r")
 
+            # TODO parallelize training of each batch across all GPUs
+            # Extract batch and train
             sentence_context, queries, expected_sentences = zip(*batch)
-            loss += self._train_batch(sentence_context, queries, expected_sentences, learning_rate)
+            feed_dict = {
+                self._sentence_context: np.array(sentence_context),
+                self._queries: np.array(queries),
+                self._expected_sentences: np.array(expected_sentences),
+                self._learning_rate: learning_rate
+            }
 
+            emb_output = embedding_with_floats(self.A_1, self._output, beta = 1) # Hack to embed non-integral one-hot vectors
+            emb_expected = tf.nn.embedding_lookup(self.A_1, self._expected_sentences)
+
+            cos_dists = cosine_distance(emb_output, emb_expected)
+            x, y, z = self._sess.run([emb_output, emb_expected, cos_dists], feed_dict)
+            print(x.shape, y.shape, z.shape)
+            # print("Cosine distances")
+            # print(self._sess.run(cos_dists, feed_dict))
+            # print()
+            # distances = tf.reduce_sum(cos_dists, axis = -1)
+            # print("Distances")
+            # print(self._sess.run(distances, feed_dict))
+            # print()
+            # loss = tf.reduce_mean(distances) # Average over batches
+            # print("Loss")
+            # print(self._sess.run(loss, feed_dict))
+            __import__("sys").exit()
+
+            batch_loss, _ = self._sess.run([self._loss_op, self._train_op], feed_dict = feed_dict)
+
+            # for var in tf.trainable_variables():
+                # print(var)
+                # print(self._sess.run(var))
+                # print()
+            # print(self._sess.run(self._rnn_W))
+            # print(self._sess.run(self._rnn_W))
+            # print(self._sess.run(self._rnn_b))
+            # print(self._sess.run(self.W))
+            __import__("sys").exit()
+
+            loss += batch_loss
             num_batches += 1
-        
-        if verbose:
-            clear_line()
 
         return loss / (num_batches * self._batch_size) # Return average loss
-
-    def _train_batch(self, sentence_context, queries, expected_sentences, learning_rate):
-        # Prepare inputs, convert to numpy arrays
-        feed_dict = {
-            self._sentence_context: np.array(sentence_context),
-            self._queries: np.array(queries),
-            self._expected_sentences: np.array(expected_sentences),
-            self._learning_rate: learning_rate
-        }
-
-        # Train
-        loss, _ = self._sess.run([self._loss_op, self._train_op], feed_dict = feed_dict)
-        return loss 
 
     def test(self, data):
         """ Tests the model on the given data without training it, returning the loss.
@@ -334,7 +373,8 @@ class MNN:
 
         @return float
         """
-        # TODO Add functionality to support batch generators instead putting all data in memory
+        if isinstance(data, types.GeneratorType):
+            data = list(data)
 
         # Extract data, prepare inputs
         sentence_context, queries, expected_sentences = zip(*data)
@@ -365,7 +405,7 @@ class MNN:
                 self._sentence_context: np.array([sentence_context]), # Batch size of 1
                 self._queries: np.array([queries])
             }
-            prediction = self._sess.run(self._predict_op, feed_dict = feed_dict)[0]
+            prediction = self._sess.run(self._output, feed_dict = feed_dict)[0]
             prediction = np.argmax(prediction, axis = 1)
 
         return prediction
@@ -377,22 +417,22 @@ class MNN:
         
         @return str
         """
-        # Split into context and query
+        # Convert to indices and remove sentences that are too long
+        sentences = [self._data.process_raw(sentence) for sentence in sentences]
+        sentences = [sentence for sentence in sentences if len(sentence) <= self._sentence_size]
+
+        # Split into context and query, fitting sentence context into memory
         sentence_context, query = sentences[: -1], sentences[-1]
-
-        # Tokenize
-        sentence_context = [nltk.tokenize.word_tokenize(sentence) for sentence in sentences]
-        query = nltk.tokenize.word_tokenize(query)
-
-        # Map to one-hot indices
-        sentence_context = [[self._word_to_index(word) for word in sentence] for sentence in sentence_context]
-        query = [self._word_to_index(word) for word in query]
+        if len(sentence_context) > self._memory_size:
+            sentence_context = sentence_context[- self._memory_size :]
+        elif len(sentence_context) < self._memory_size:
+            sentence_context = [[0 for _ in range(self._sentence_size)] for _ in range(self._memory_size - len(sentence_context))] + sentence_context
 
         # Get model prediction
-        prediction = self.feedforward(sentence_context, queries)
+        prediction = self.feedforward(sentence_context, query)
 
         # Return raw sentence
-        raw_prediction = " ".join([self._index_to_word[index] for index in prediction])
+        raw_prediction = self._data.unprocess(prediction)
         return raw_prediction
     
     def save(self, index = None):
@@ -446,8 +486,11 @@ def position_encoding(sentence_size, embedding_dim):
 
     return np.transpose(encoding)
 
-def zero_nil_slot(t, name = None):
-    with tf.name_scope(name, "zero_nil_slot", [t]) as name:
+def sentence_representation(embedded_sentences, encoding, axis = -2):
+    return tf.reduce_sum(embedded_sentences * encoding, axis = axis)
+
+def zero_null_slot(t, name = None):
+    with tf.name_scope(name, "zero_null_slot", [t]) as name:
         t = tf.convert_to_tensor(t, name="t")
         s = tf.shape(t)[1]
         z = tf.zeros(tf.stack([1, s]))
@@ -459,12 +502,43 @@ def add_gradient_noise(t, stddev = 1e-3, name = None):
         gn = tf.random_normal(tf.shape(t), stddev = stddev)
         return tf.add(t, gn, name = name)
 
-def differentiable_argmax(x, beta = 1, axis = -1):
-    probabilities = tf.nn.softmax(beta * x)
-    values = tf.range(1, x.get_shape().as_list()[-1] + 1, dtype = tf.float32)
-    expected_value = tf.reduce_sum(tf.multiply(probabilities, values), axis = axis)
+def embedding_with_floats(embedding_matrix, x, beta = 1, axis = -1):
+    # Accentuate existing (unnormalized) probability distribution on x
+    x = tf.nn.softmax(beta * x)
 
-    return expected_value
+    embeddings = tf.einsum("ijk,kl->ijl", x, embedding_matrix)
+    return embeddings
 
 def clear_line():
     sys.stdout.write("\033[K") # Clear to the end of line
+
+def dot_product(x, y):
+    return tf.reduce_sum(tf.multiply(x, y), axis = -1)
+
+def magnitude(x):
+    return tf.sqrt(dot_product(x, x))
+
+def cosine_distance(x, y, epsilon = 0.00001):
+    inner_prod = dot_product(x, y)
+    # mag_prod = tf.multiply(magnitude(x) + epsilon, magnitude(y) + epsilon) # Prevent divide by zero
+    mag_prod = tf.multiply(magnitude(x), magnitude(y)) + epsilon # Prevent divide by zero
+
+    similarity = tf.divide(inner_prod, mag_prod)
+    return (1 - similarity) / 2 # Negate and map to [0, 1]
+
+def print_hyperparameters(model):
+    print("Hyperparameters:")
+    print("\tMaximum sentence size: %s" % str(model._sentence_size))
+    print("\tVocabulary size: %s" % str(model._vocab_size))
+    print("\tBatch size: %s" % str(model._batch_size))
+    print("\tMemory size: %s" % str(model._memory_size))
+    print("\tEmbedding dimension: %s" % str(model._embedding_dim))
+    print("\tNumber of hops: %s" % str(model._hops))
+    print("\tNumber of RNN layers: %s" % str(model._num_rnn_layers))
+    print("\tNumber of LSTM units per RNN layer: %s" % str(model._num_lstm_units))
+    print("\tLSTM forget bias: %s" % str(model._lstm_forget_bias))
+    print("\tRNN dropout keep probability: %s" % str(model._rnn_dropout_keep_prob))
+    print("\tInitial learning rate: %s" % str(model._init_lr))
+    print("\tMaximum gradient norm: %s" % str(model._max_grad_norm))
+    print("\tNon-linearity: %s" % str(model._nonlin))
+    print()

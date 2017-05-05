@@ -1,9 +1,11 @@
-import os, random, socket, collections, pickle, shutil, string, sys, nltk
+import os, random, socket, collections, pickle, shutil, string, sys, nltk, collections, re
 from pymongo import MongoClient
 import numpy as np
 
 class Data:
-    def __init__(self, data_path, metadata_path, unk_threshold = 5, memory_size = 50, batch_size = 128):
+    # TODO implement byte-pair encoding
+
+    def __init__(self, data_path, metadata_path, unk_threshold = 50, memory_size = 50, max_sentence_size = 70, batch_size = 128):
         """ Constructor.
 
         @param data_path (str) Path to directory where raw data is stored.
@@ -13,17 +15,16 @@ class Data:
         """
         self.data_path = data_path
         self.memory_size = memory_size
+        self.max_sentence_size = max_sentence_size
         self.batch_size = batch_size
         self.unk_threshold = unk_threshold
 
-        if os.path.exists(metadata_path):
-            p = os.path.join(metadata_path, "max_sentence_size.txt")
-            with open(p, "r") as f:
-                self.max_sentence_size = int(f.read())
+        # These will be initialized based on the metadata path
+        self.named_entities_index = None
+        self.word_frequencies = None
 
-            p = os.path.join(metadata_path, "word_frequencies.p")
-            with open(p, "rb") as f:
-                self.word_frequencies= pickle.load(f)
+        if os.path.exists(metadata_path):
+            self._load_metadata(metadata_path)
         else:
             self._save_metadata(metadata_path)
 
@@ -31,11 +32,32 @@ class Data:
         self.word_to_index = {word: index + 1 for index, word in enumerate(words)} # Add one since 0 is reserved for padding
         self.word_to_index["<unk>"] = len(self.word_to_index) + 1
         self.index_to_word = {self.word_to_index[word]: word for word in self.word_to_index}
+        self.named_entities_index_inverse = {self.named_entities_index[named_entity]: named_entity for named_entity in self.named_entities_index}
+
+    def _load_metadata(self, metadata_path):
+        p = os.path.join(metadata_path, "max_sentence_size.txt")
+        with open(p, "r") as f:
+            self.max_sentence_size = int(f.read())
+
+        p = os.path.join(metadata_path, "word_frequencies.p")
+        with open(p, "rb") as f:
+            self.word_frequencies= pickle.load(f)
+
+        p = os.path.join(metadata_path, "named_entities_index.p")
+        with open(p, "rb") as f:
+            self.named_entities_index = pickle.load(f)
 
     def _save_metadata(self, metadata_path):
         os.makedirs(metadata_path)
 
-        self.word_frequencies, self.max_sentence_size = _word_frequencies(self.data_path)
+        class Tokenizer(nltk.tokenize.TreebankWordTokenizer):
+            # Simple class that modifies the default NLTK tokenizer to avoid viewing "<" and ">" as delimiters
+            def __init__(self):
+                self.PARENS_BRACKETS[0] = (re.compile("[\\]\\[\\(\\)\\{\\}]"), " \\g<0> ")
+
+        self.word_frequencies, self.named_entities_index = {}, {}
+        self.max_sentence_size, self.num_sentences, self.num_documents = self._extract_metadata(self.data_path, self.word_frequencies, self.named_entities_index, tokenizer)
+        self.word_frequencies = dict(self.word_frequencies)
 
         p = os.path.join(metadata_path, "max_sentence_size.txt")
         with open(p, "w") as f:
@@ -44,6 +66,10 @@ class Data:
         p = os.path.join(metadata_path, "word_frequencies.p")
         with open(p, "wb") as f:
             pickle.dump(self.word_frequencies, f)
+
+        p = os.path.join(metadata_path, "named_entities_index.p")
+        with open(p, "wb") as f:
+            pickle.dump(self.named_entities_index, f)
 
     def get_batches(self, data_path):
         """ Generator that yields batches one at a time, to accomodate datasets that won't fit in memory. Data
@@ -58,19 +84,65 @@ class Data:
 
         batch = []
         for document in documents:
+            # print(document)
             with open(os.path.join(data_path, document), "r") as f:
                 sentences = f.readlines()
+                sentences = [self._to_index(sentence) for sentence in sentences]
+                sentences = [sentence for sentence in sentences if len(sentence) <= self.max_sentence_size]
 
-            for i in range(len(sentences) - (self.memory_size + 2)):
-                sentence_context = [self._to_index(sentence) for sentence in sentences[i : i + self.memory_size]]
-                query = self._to_index(sentences[i + self.memory_size])
-                expected_sentence = self._to_index(sentences[i + self.memory_size + 1])
+            if len(sentences) < self.memory_size + 2:
+                continue
 
-                batch.append((sentence_context, query, expected_sentence))
-                if len(batch) >= self.batch_size:
-                    random.shuffle(batch)
-                    yield batch
-                    batch = []
+            step, end = min(len(sentences), self.memory_size + 2), max(1, len(sentences) - (self.memory_size + 2))
+            if step >= 3:
+                for i in range(end):
+                    sentence_context = sentences[i : i + step - 2]
+                    sentence_context = [[0 for _ in range(self.max_sentence_size)] for _ in range(self.memory_size - (step - 2))] + sentence_context
+                    query = sentences[i + step - 2]
+                    expected_sentence = sentences[i + step - 1]
+
+                    batch.append((sentence_context, query, expected_sentence))
+                    if len(batch) >= self.batch_size:
+                        random.shuffle(batch)
+                        yield batch
+                        batch = []
+
+    def process_raw(self, sentence):
+        # Replace named entities
+        named_entities = continuous_named_entities(sentence)
+        for ne in named_entities:
+            lowered_ne = ne.lower()
+            if lowered_ne not in self.named_entities_index: 
+                sentence = sentence.replace(ne, "<unk>")
+            else:
+                sentence = sentence.replace(ne, "<NE%i>" % self.named_entities_index[lowered_ne])
+
+        # Tokenize
+        indices = self._to_index(sentence)
+
+        # TODO Process with BPE
+
+        return indices
+
+    def unprocess(self, one_hot_sentence):
+        # TODO add functionality for undoing BPE
+
+        # Convert to words
+        try:
+            one_hot_sentence = one_hot_sentence[: list(one_hot_sentence).index(0)]
+        except ValueError:
+            pass # Sentence is maximum size
+        words = [self.index_to_word_lookup(index) for index in one_hot_sentence]
+
+        # Replace named entities
+        for i in range(len(words)):
+            if words[i].startswith("<ne"): # Found named entity
+                index = int(words[i][len("<ne") : -1])
+                words[i] = self.index_to_named_entity_lookup(index)
+
+        sentence = " ".join(words)
+        return sentence
+
 
     def _to_index(self, sentence):
         indices = [self.word_to_index_lookup(word.lower()) for word in nltk.tokenize.word_tokenize(sentence)]
@@ -85,6 +157,51 @@ class Data:
 
     def index_to_word_lookup(self, index):
         return self.index_to_word[index]
+
+    def named_entity_to_index_lookup(self, named_entity):
+        return self.named_entities_index[named_entity]
+
+    def index_to_named_entity_lookup(self, index):
+        return self.named_entities_index_inverse[index]
+
+    def _extract_metadata(self, path, freqs, named_entities_index, tokenizer):
+        """ Recursively reads all text documents in the given path, extracting word frequencies, the maximum
+        sentence size, and the number of batches.
+        """
+        max_sentence_size = - float("inf")
+        if os.path.isdir(path): # Recurse on sub-directories
+            for sub_file in os.listdir(path):
+                sub_path = os.path.join(path, sub_file)
+                sub_max_sentence_size = extract_metadata(sub_path, freqs, named_entities_index, tokenizer)
+
+                # Update
+                max_sentence_size = max(max_sentence_size, sub_max_sentence_size)
+        else: # Base case
+            with open(path, "r") as f:
+                try:
+                    sentences = f.readlines()
+                except UnicodeDecodeError:
+                    print("Error: File \"%s\" not encoded with UTF-8" % path)
+                    return freqs, max_sentence_size, num_sentences
+
+            for sentence in sentences:
+                # Replace named entities with corresponding symbols
+                named_entities = continuous_named_entities(sentence)
+                for ne in named_entities:
+                    lowered_ne = ne.lower()
+                    if lowered_ne not in named_entities_index: 
+                        # New named entity found, so create a new symbol
+                        named_entities_index[lowered_ne] = len(named_entities_index)
+
+                    sentence = sentence.replace(ne, "<NE%i>" % named_entities_index[lowered_ne])
+
+                # Update 
+                words = [word.lower() for word in tokenizer.tokenize(sentence)]
+                if len(words) <= self.max_sentence_size:
+                    freqs += collections.Counter(words)
+                max_sentence_size = max(max_sentence_size, len(words))
+        
+        return max_sentence_size
 
 class MongoConn:
     def __init__(self, ip_addr, port = 27017):
@@ -204,37 +321,35 @@ class MongoConn:
 
     listdir_recursive = lambda directory: [os.path.join(dp, f) for dp, dn, fn in os.walk(os.path.expanduser(directory)) for f in fn]
 
-def _word_frequencies(path):
-    freqs, max_sentence_size = {}, -1
-    if os.path.isdir(path):
-        for sub_file in os.listdir(path):
-            sub_path = os.path.join(path, sub_file)
-            sub_freqs, new_max_sentence_size = _word_frequencies(sub_path)
-
-            max_sentence_size = max(max_sentence_size, new_max_sentence_size)
-            for word in sub_freqs:
-                if word not in freqs:
-                    freqs[word] = 0
-
-                freqs[word] += sub_freqs[word]
-    else:
-        with open(path, "r") as f:
-            for sentence in f.readlines():
-                words = [word.lower() for word in nltk.tokenize.word_tokenize(sentence)]
-
-                max_sentence_size = max(max_sentence_size, len(words))
-                for word in words:
-                    if word not in freqs:
-                        freqs[word] = 0
-
-                    freqs[word] += 1
-
-    return freqs, max_sentence_size
+# Utility functions below
 
 def _random_word(length):
     return "".join(random.choice(string.ascii_uppercase) for i in range(length))
 
-if __name__ == "__main__":
-    m = MongoConn("10.0.1.180")
-    m.convert("/home/ubuntu/data/wikipedia", collections = {"corpora": ["wiki"]})
+def continuous_named_entities(sentence):
+    chunks = nltk.ne_chunk(nltk.pos_tag(nltk.word_tokenize(sentence)))
+    continuous_chunk, curr_chunk = [], []
+    for node in chunks:
+        if type(node) == nltk.tree.Tree:
+            curr_chunk.append(" ".join([token for token, pos in node.leaves()]))
+        elif len(curr_chunk) > 0:
+            named_entity = " ".join(curr_chunk)
+            if named_entity not in continuous_chunk:
+                continuous_chunk.append(named_entity)
+                curr_chunk = []
 
+    return continuous_chunk
+
+# m = MongoConn("10.0.1.180")
+# m.convert("/home/ubuntu/data/wikipedia/raw", collections = {"corpora": ["wiki"]})
+
+# import time
+# start = time.time()
+# data = Data(data_path = "/home/ubuntu/data/wikipedia/",
+            # metadata_path = "/home/ubuntu/data/wikipedia/metadata",
+            # unk_threshold = 25,
+            # memory_size = 50,
+            # batch_size = 128)
+# end = time.time()
+# print("Vocab size:", len(data.word_to_index))
+# print("Time: %s seconds" % str(end - start))
